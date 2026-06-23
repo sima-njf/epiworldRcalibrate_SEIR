@@ -1,0 +1,408 @@
+---
+title: "LSTM-Calibrated SEIR Model for COVID-19 Dynamics"
+subtitle: "Utah COVID-19 Case Prediction with Uncertainty Quantification"
+author: "Sima Najafzadehkhoei"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    embed-resources: true
+editor: visual
+---
+
+## Introduction
+
+This analysis demonstrates an innovative approach to epidemic modeling by combining deep learning with traditional compartmental models. We use a BiLSTM (Bidirectional Long Short-Term Memory) neural network to calibrate parameters for a stochastic SEIR (Susceptible-Exposed-Infected-Recovered) model, then run multiple simulations to quantify prediction uncertainty.
+
+The SEIR model extends the basic SIR framework by including an **Exposed (E)** compartment, representing individuals who are infected but not yet infectious. This better captures the latent period characteristic of COVID-19 and other infectious diseases.
+
+### Workflow Overview
+
+1.  Download recent COVID-19 case data from Utah
+2.  Use BiLSTM to estimate SEIR model parameters from 61-day incidence patterns
+3.  Run 2,000 stochastic SEIR simulations with calibrated parameters
+4.  Extract daily infection counts (E→I transitions) and compute 95% confidence intervals
+5.  Compare model predictions against observed data
+
+## Setup
+
+Load required packages for data manipulation, modeling, and visualization:
+
+```{r setup, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggplot2)
+  library(epiworldR)
+})
+```
+
+## Data Acquisition
+
+### Download Functions
+
+We create helper functions to download and process Utah's COVID-19 surveillance data:
+
+```{r data-helpers}
+source("Real_data.R")
+
+# Now you can use it directly
+head(utah_covid_data)
+summary(utah_covid_data)
+```
+
+### Load Recent Case Data
+
+Retrieve the most recent 61 days of daily case counts:
+
+```{r load-data}
+get_covid_data <- function(n_days) {
+  
+  # Use packaged data
+  covid_data <- utah_covid_data
+  
+  # Filter to last n_days
+  last_date <- max(covid_data$Date, na.rm = TRUE)
+  covid_data <- subset(covid_data, Date > (last_date - n_days)) %>% 
+    dplyr::arrange(Date)
+  
+  stopifnot("Daily.Cases" %in% names(covid_data))
+  covid_data
+}
+n_days <- 61
+covid_data <- get_covid_data(n_days)
+incidence <- covid_data$Daily.Cases
+incidence_vec <- incidence
+
+stopifnot(length(incidence) == n_days)
+
+cat("Date range:", as.character(min(covid_data$Date)), "to", 
+    as.character(max(covid_data$Date)), "\n")
+cat("Total cases observed:", sum(incidence), "\n")
+cat("Mean daily cases:", round(mean(incidence), 1), "\n")
+```
+
+The BiLSTM model requires exactly 61 consecutive days of incidence data. This window length captures approximately two months of epidemic dynamics, sufficient to identify transmission patterns while remaining computationally efficient.
+
+## BiLSTM Parameter Calibration
+
+### Model Parameters
+
+The SEIR model requires four key parameters:
+
+-   **Transmission probability (ptran)**: Probability of infection per contact
+-   **Contact rate (crate)**: Average number of contacts per person per day
+-   **Incubation rate (incub)**: Rate of progression from exposed to infectious (1/incubation period)
+-   **Recovery rate (recov)**: Rate of recovery from infection (1/infectious period)
+-   **Basic reproduction number (R₀)**: Expected secondary infections per case
+
+### Running Calibration
+
+We define the population size, incubation rate, and recovery rate, then use the BiLSTM to estimate parameters:
+
+```{r calibrate}
+
+# Model configuration
+N     <- 5000        # Population size
+incub <- 7.5        # Incubation rate (7.5-day incubation period)
+recov <- 1 / 7         # Recovery rate (7-day infectious period)
+source("calibrate_seir.R")
+
+# LSTM calibration
+lstm_predictions <- calibrate_seir(
+  incidence_vec = incidence_vec,
+  n     = N,
+  incub = incub,
+  recov = recov
+)
+
+print(lstm_predictions)
+```
+
+The BiLSTM neural network has learned relationships between incidence time series patterns and underlying transmission dynamics from training data. It processes the 61-day sequence bidirectionally to capture both past and future context when estimating parameters.
+
+The SEIR model explicitly represents the **latent period** between exposure and infectiousness, which is particularly important for COVID-19 where individuals can be infected for several days before becoming contagious.
+
+### Parameter Consistency
+
+The contact rate is recalculated using the fundamental epidemiological relationship:
+
+$$\text{contact rate} = \frac{R_0 \times \text{recovery rate}}{\text{transmission probability}}$$
+
+This ensures internal consistency between the three parameters.
+
+### Initial Conditions
+
+```{r initial-conditions}
+init_infected <- incidence[1]
+prev <- init_infected / N
+
+cat("Initial infected count:", init_infected, "\n")
+cat("Initial prevalence:", round(prev * 100, 4), "%\n")
+```
+
+## Stochastic SEIR Simulation
+
+### Building the Model
+
+We construct a contact-network SEIR model using the calibrated parameters:
+
+```{r build-model}
+model <- ModelSEIRCONN(
+  name              = "Utah LSTM-calibrated SEIR",
+  n                 = N,
+  prevalence        = prev,
+  contact_rate      = lstm_predictions[["crate"]],
+  transmission_rate = lstm_predictions[["ptran"]],
+  incubation_days   = incub,
+  recovery_rate     = recov
+)
+```
+
+The `ModelSEIRCONN` structure simulates disease transmission through a contact network with an explicit exposed compartment, providing more realistic dynamics than simple SIR models by accounting for the latent period.
+
+### Multiple Simulation Runs
+
+To quantify uncertainty, we run 2,000 independent stochastic realizations:
+
+```{r run-simulations}
+saver <- make_saver("transition")
+
+run_multiple(
+  model,
+  ndays    = n_days,   # Run for n_days
+  nsims    = 2000,
+  saver    = saver,
+  nthreads = 12
+)
+
+sim_results <- run_multiple_get_results(
+  model,
+  nthreads = 12,
+  freader = data.table::fread
+)
+```
+
+Each simulation represents one possible trajectory of the epidemic. By running many simulations, we capture the stochastic variability inherent in transmission processes.
+
+## Extracting Daily Infections
+
+### Transition Matrices
+
+The model tracks all state transitions. We focus on Exposed → Infected transitions, which represent individuals progressing from the latent period to the infectious period (when cases are typically detected):
+
+```{r extract-transitions}
+cat("=== Extracting E→I transitions ===\n")
+
+transitions <- sim_results$transition %>%
+  filter(from == "Exposed", to == "Infected") %>%
+  arrange(sim_num, date)
+# transitions <- sim_results$transition %>%
+#   filter(
+#     (from == "Susceptible" & to == "Exposed") |
+#     (from == "Exposed" & to == "Infected")
+#   ) %>%
+#   arrange(sim_num, date)
+
+cat("Dimensions:", nrow(transitions), "rows ×", ncol(transitions), "columns\n")
+head(transitions, 10)
+agg_by_date <- transitions %>%
+  group_by(sim_num, date) %>%
+  summarise(
+    counts = sum(counts),
+    .groups = "drop"
+  )
+
+```
+
+**Note**: In the SEIR model, E→I transitions represent when exposed individuals become infectious and symptomatic. This is the point at which cases are typically detected and reported. If you want to track new infections (S→E transitions) instead, you can modify the filter to `from == "Susceptible", to == "Exposed"`.
+
+### Computing Confidence Intervals
+
+For each day, we calculate quantiles across all 2,000 simulations:
+
+```{r calculate-quantiles}
+cat("=== Calculating 95% CI (2.5th and 97.5th percentiles) ===\n")
+
+quantiles_df <- agg_by_date %>%
+  group_by(date) %>%
+  summarize(
+    lower_ci = quantile(counts, 0.025),
+    upper_ci = quantile(counts, 0.975),
+    median   = quantile(counts, 0.5),
+    mean     = mean(counts),
+    .groups  = "drop"
+  )
+
+head(quantiles_df, 10)
+```
+
+The 95% confidence interval represents the range containing 95% of simulation outcomes, providing a measure of prediction uncertainty.
+
+## Visualization
+
+### Merge with Observed Data
+
+```{r prepare-plot-data}
+
+plot_df <- quantiles_df %>%
+  mutate(
+    Date           = covid_data$Date,
+    observed_cases = incidence  # Use actual observed case data
+  )
+
+head(plot_df)
+```
+
+### Plot Results with Confidence Intervals
+
+```{r plot-results, fig.width=11, fig.height=7}
+p_with_ci <- ggplot(plot_df, aes(x = Date)) +
+  # 95% confidence interval
+  geom_ribbon(
+    aes(ymin = lower_ci, ymax = upper_ci),
+    fill = "red",
+    alpha = 0.3
+  ) +
+  # Model median
+  geom_line(
+    aes(y = median, color = "Model median (E→I)"),
+    linewidth = 1.2
+  ) +
+  # Observed cases
+  geom_line(
+    aes(y = observed_cases, color = "Observed cases"),
+    linewidth = 1.4
+  ) +
+  geom_point(
+    aes(y = observed_cases, color = "Observed cases"),
+    size = 2
+  ) +
+  scale_color_manual(
+    values = c(
+      "Model median (E→I)" = "red",
+      "Observed cases"     = "blue"
+    )
+  ) +
+  labs(
+    title = "Daily E→I Transitions: Observed vs Model with 95% CI",
+    subtitle = paste0(
+      "Population: ", format(N, big.mark = ","),
+      " | Contact rate: ", round(lstm_predictions[["crate"]], 3),
+      " | Trans. prob: ", round(lstm_predictions[["ptran"]], 3),
+      " | Incub. rate: ", round(incub, 3),
+      " | R₀: ", round(lstm_predictions[["R0"]], 2)
+    ),
+    x = "Date",
+    y = "Daily E→I Transition Counts",
+    color = "",
+    fill = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+print(p_with_ci)
+```
+
+The red shaded region represents the 95% confidence interval from 2,000 simulations. The red line shows the median prediction, while blue points are observed case counts.
+
+## Model Performance
+
+### Goodness-of-Fit Metrics
+
+```{r performance-metrics}
+# CI coverage
+coverage <- plot_df %>%
+  mutate(in_ci = observed_cases >= lower_ci & observed_cases <= upper_ci) %>%
+  summarize(
+    coverage_rate = mean(in_ci) * 100,
+    n_days = n(),
+    days_in_ci = sum(in_ci)
+  )
+
+# Error metrics
+rmse <- sqrt(mean((plot_df$median - plot_df$observed_cases)^2))
+mae <- mean(abs(plot_df$median - plot_df$observed_cases))
+mape <- mean(abs((plot_df$observed_cases - plot_df$median) / 
+                   plot_df$observed_cases)) * 100
+
+cat("=== Model Performance Metrics ===\n\n")
+cat("95% CI Coverage:", round(coverage$coverage_rate, 1), "%\n")
+cat("  (", coverage$days_in_ci, "out of", coverage$n_days, "days within CI)\n\n")
+cat("Root Mean Squared Error (RMSE):", round(rmse, 2), "cases/day\n")
+cat("Mean Absolute Error (MAE):", round(mae, 2), "cases/day\n")
+cat("Mean Absolute Percentage Error (MAPE):", round(mape, 1), "%\n")
+```
+
+### Interpretation
+
+**Coverage**: A well-calibrated model should have approximately 95% of observed values within the 95% confidence interval. Lower coverage suggests underestimated uncertainty; higher coverage suggests overestimated uncertainty.
+
+**RMSE**: Measures average prediction error magnitude, giving more weight to large errors.
+
+**MAE**: Measures average absolute error without emphasizing outliers.
+
+**MAPE**: Percentage error metric that is scale-independent.
+
+## Discussion
+
+### Key Results
+
+The BiLSTM-calibrated SEIR model successfully captured COVID-19 transmission dynamics in Utah:
+
+-   Estimated transmission probability: **`r round(lstm_predictions[["ptran"]], 3)`**
+-   Estimated contact rate: **`r round(lstm_predictions[["crate"]], 3)`** contacts/person/day
+-   Incubation rate: **`r round(incub, 3)`** per day (7.5-day incubation period)
+-   Recovery rate: **`r round(recov, 3)`** per day (7-day infectious period)
+-   Basic reproduction number: **R₀ = `r round(lstm_predictions[["R0"]], 2)`**
+
+The model achieved **`r round(coverage$coverage_rate, 1)`%** coverage with a 95% confidence interval and mean absolute error of **`r round(mae, 2)`** cases per day.
+
+### Advantages of This Approach
+
+1.  **Hybrid methodology**: Combines neural network pattern recognition with mechanistic epidemiological modeling
+2.  **Interpretable parameters**: Outputs meaningful epidemiological quantities (R₀, contact rates, incubation period)
+3.  **Uncertainty quantification**: Stochastic simulations provide prediction intervals
+4.  **Real-time capability**: Can be updated as new surveillance data becomes available
+5.  **Minimal assumptions**: BiLSTM learns patterns from data rather than requiring detailed knowledge of transmission mechanisms
+6.  **Explicit latent period**: SEIR model better represents COVID-19 biology where individuals are infected but not yet contagious
+
+### Advantages of SEIR over SIR
+
+-   **More realistic disease progression**: Explicitly models the latent/incubation period between infection and infectiousness
+-   **Better fit for COVID-19**: COVID-19 has a well-documented incubation period of 5-7 days where individuals are infected but not yet symptomatic or highly contagious
+-   **Delays transmission dynamics**: The exposed compartment creates a more realistic delay between infection events and subsequent transmissions
+-   **Improved forecasting**: Better captures the temporal dynamics of epidemic curves
+
+### Limitations
+
+-   **Homogeneous mixing**: Assumes uniform contact patterns across the population
+-   **Constant parameters**: Does not capture time-varying transmission due to interventions or behavioral changes
+-   **Closed population**: No births, deaths, or migration
+-   **Fixed incubation and recovery periods**: Assumes all individuals progress through compartments at the same average rate
+-   **No spatial structure**: Treats the entire state as a single well-mixed population
+-   **Simplified exposed compartment**: Does not distinguish between different stages of the latent period or varying infectiousness
+
+### Future Directions
+
+-   Incorporate time-varying parameters to model interventions (lockdowns, mask mandates)
+-   Extend to SEIRS model including waning immunity
+-   Add age-structured compartments to capture heterogeneous risk
+-   Incorporate spatial structure with metapopulation models
+-   Model pre-symptomatic transmission in the exposed compartment
+-   Include hospitalization and death compartments for severity predictions
+
+## Conclusion
+
+This analysis demonstrates that BiLSTM neural networks can effectively calibrate traditional compartmental epidemic models from observed incidence data. The SEIR framework provides a more biologically realistic representation of COVID-19 transmission than basic SIR models by explicitly accounting for the latent period between infection and infectiousness.
+
+The resulting stochastic SEIR simulations provide both point predictions and uncertainty quantification, offering a powerful tool for public health decision-making. The approach is particularly valuable when detailed knowledge of transmission mechanisms is limited but historical incidence data is available.
+
+By learning patterns from data, the BiLSTM can estimate parameters that would otherwise require extensive epidemiological investigation, while the SEIR structure ensures the model respects fundamental biological constraints about disease progression.
