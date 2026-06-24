@@ -1,381 +1,199 @@
-# =====================================================================
-# BiLSTM Epicurve Reconstruction  (v4 model — no hyperparameter file)
-# =====================================================================
-# Required files in OUTPUT_DIR:
-#   model_bilstm.pt         — trained weights
-#   scaler_additional.pkl   — MinMaxScaler fitted on [n, recov, incub]
-#   scaler_targets.pkl      — MinMaxScaler fitted on [beta, R0]
-#
-# The model predicts beta (= ptran * crate) and R0.
-# incubation days (incub) are a KNOWN input — you must supply them.
-# =====================================================================
+#\' @keywords internal
+#\' @importFrom stats setNames
+"_PACKAGE"
 
-library(tidyverse)
-library(epiworldR)
-library(reticulate)
-library(data.table)
+.bilstm_env <- new.env(parent = emptyenv())
+.bilstm_env$loaded <- FALSE
 
-torch  <- import("torch")
-np     <- import("numpy")
-joblib <- import("joblib")
-
-# ── Path to your model folder ─────────────────────────────────────────
-OUTPUT_DIR <- path.expand("~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/model")
-
-cat("Path exists:", dir.exists(OUTPUT_DIR), "\n")
-cat("Files found:\n")
-print(list.files(OUTPUT_DIR))
-
-# =====================================================================
-# 1.  Load BiLSTM model + scalers
-#     Architecture hardcoded from notebook (no best_hyperparams.pkl):
-#       LSTM_HIDDEN  = 160
-#       LSTM_LAYERS  = 3
-#       additional_dim = 6   [n, recov, incub, win_len/T_MAX, log_mean/10, log_std/10]
-#       output_dim     = 2   [beta, R0]
-# =====================================================================
-
-py_run_string(paste0("
+# ── Embedded Python ───────────────────────────────────────────────────────────
+.python_code <- \'
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence
-import joblib, os
+import joblib
+import numpy as np
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 
-OUTPUT_DIR = '", OUTPUT_DIR, "'
+_model = None; _scaler_add = None; _scaler_tgt = None
+_device = torch.device("cpu"); T_MAX = 365
 
-# ── BiLSTM architecture (must match training exactly) ────────────────
 class BiLSTMRegressor(nn.Module):
-    def __init__(self, hidden, num_layers, dropout,
-                 additional_dim=6, output_dim=2):
+    """
+    Exact SEIR architecture from SEIR_FourModels_RevIN notebook:
+      hidden=160, num_layers=3, dropout=0.5
+      additional_dim=6  [n, recov, incub, win_len/T_MAX, log_mean/10, log_std/10]
+      output_dim=2      [sigmoid(beta), sigmoid(R0)]
+    """
+    def __init__(self):
         super().__init__()
-        self.lstm = nn.LSTM(
-            input_size    = 1,
-            hidden_size   = hidden,
-            num_layers    = num_layers,
-            batch_first   = True,
-            bidirectional = True,
-            dropout       = (dropout if num_layers > 1 else 0.0)
-        )
-        self.fc1       = nn.Linear(2 * hidden + additional_dim, 64)
-        self.fc2       = nn.Linear(64, output_dim)
+        self.lstm = nn.LSTM(input_size=1, hidden_size=160, num_layers=3,
+                            batch_first=True, bidirectional=True, dropout=0.5)
+        self.fc1       = nn.Linear(2 * 160 + 6, 64)
+        self.fc2       = nn.Linear(64, 2)
         self.act       = nn.GELU()
-        self.head_drop = nn.Dropout(dropout)
+        self.head_drop = nn.Dropout(0.5)
 
     def forward(self, x, pad_mask, add_inputs, lengths=None):
         if lengths is not None:
-            packed = pack_padded_sequence(
-                x, lengths.cpu(), batch_first=True, enforce_sorted=False)
+            packed = pack_padded_sequence(x, lengths.cpu(),
+                                         batch_first=True, enforce_sorted=False)
             _, (h, _) = self.lstm(packed)
         else:
             _, (h, _) = self.lstm(x)
         rep = torch.cat([h[-2], h[-1]], dim=-1)
-        z   = torch.cat([rep, add_inputs], dim=-1)
-        z   = self.head_drop(self.act(self.fc1(z)))
-        return torch.sigmoid(self.fc2(z))
+        z   = self.head_drop(self.act(self.fc1(torch.cat([rep, add_inputs], dim=-1))))
+        return torch.sigmoid(self.fc2(z))   # [beta, R0]
 
-# ── Hardcoded hyperparameters (from notebook — no Optuna file needed) ─
-HIDDEN_DIM = 160
-NUM_LAYERS = 3
-DROPOUT    = 0.0   # irrelevant at inference; model.eval() disables dropout
 
-model = BiLSTMRegressor(
-    hidden         = HIDDEN_DIM,
-    num_layers     = NUM_LAYERS,
-    dropout        = DROPOUT,
-    additional_dim = 6,
-    output_dim     = 2
-)
+def load_model(model_path, scaler_add_path, scaler_tgt_path):
+    global _model, _scaler_add, _scaler_tgt
+    _scaler_add = joblib.load(scaler_add_path)   # fitted on [n, recov, incub]
+    _scaler_tgt = joblib.load(scaler_tgt_path)   # fitted on [beta, R0]
+    _model = BiLSTMRegressor()
+    _model.load_state_dict(torch.load(model_path, map_location=_device, weights_only=True))
+    _model.to(_device).eval()
 
-state = torch.load(
-    os.path.join(OUTPUT_DIR, 'model_bilstm.pt'),
-    map_location = 'cpu'
-)
-model.load_state_dict(state)
-model.eval()
-print(f'BiLSTM loaded  |  hidden={HIDDEN_DIM}  layers={NUM_LAYERS}')
 
-# ── Scalers ───────────────────────────────────────────────────────────
-# scaler_additional : MinMaxScaler fitted on [n, recov, incub]  (3 cols)
-# scaler_targets    : MinMaxScaler fitted on [beta, R0]          (2 cols)
-scaler_additional = joblib.load(os.path.join(OUTPUT_DIR, 'scaler_additional.pkl'))
-scaler_targets    = joblib.load(os.path.join(OUTPUT_DIR, 'scaler_targets.pkl'))
-print('Scalers loaded.')
-print('Ready.')
-"))
+def predict(seq, n, recov, incub):
+    """
+    seq   : list or 1-D array, length 15-365, raw daily incidence (NOT normalised)
+    n     : population size
+    recov : recovery rate (e.g. 1/7)
+    incub : incubation period in days (known parameter)
+    Returns [beta, R0] in natural units.
+    """
+    x_raw   = np.asarray(seq, dtype=np.float32)
+    win_len = len(x_raw)
 
-cat("Model ready!\n")
+    # RevIN: z-score by this window own mean and std
+    wm, ws = float(x_raw.mean()), float(x_raw.std())
+    if ws < 1e-6:
+        x_norm   = np.zeros_like(x_raw)
+        log_mean = float(np.log1p(wm))
+        log_std  = 0.0
+    else:
+        x_norm   = (x_raw - wm) / ws
+        log_mean = float(np.log1p(wm))
+        log_std  = float(np.log1p(ws))
 
-# =====================================================================
-# 2.  calibrate_seir_bilstm()
-#     Input  : observed incidence vector + known epi parameters
-#     Returns: data.table with beta, R0, incub
-# =====================================================================
+    # Scale [n, recov, incub] with the fitted MinMaxScaler
+    add_sc = _scaler_add.transform(
+        np.array([[n, recov, incub]], dtype=np.float32))[0]
 
-calibrate_seir_bilstm <- function(incidence_vec,
-                                  n,      # population size
-                                  recov,  # recovery rate
-                                  incub,  # incubation days (known)
-                                  T_MAX = 365) {
+    # 6-feature additional vector
+    add_row = np.array([
+        add_sc[0],         # n      (MinMax scaled)
+        add_sc[1],         # recov  (MinMax scaled)
+        add_sc[2],         # incub  (MinMax scaled) — known parameter
+        win_len / T_MAX,   # relative window length
+        log_mean / 10.0,   # RevIN level
+        log_std  / 10.0,   # RevIN scale
+    ], dtype=np.float32)
 
-  win_len  <- length(incidence_vec)
-  win_mean <- mean(incidence_vec)
-  win_std  <- sd(incidence_vec)
+    x_t    = torch.tensor(x_norm,  dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
+    add_t  = torch.tensor(add_row, dtype=torch.float32).unsqueeze(0)
+    mask_t = torch.zeros(1, win_len, dtype=torch.bool)
+    len_t  = torch.tensor([win_len], dtype=torch.long)
 
-  # RevIN: per-window z-score normalisation
-  if (win_std < 1e-6) {
-    x_norm   <- rep(0.0, win_len)
-    log_mean <- log1p(win_mean)
-    log_std  <- 0.0
-  } else {
-    x_norm   <- (incidence_vec - win_mean) / win_std
-    log_mean <- log1p(win_mean)
-    log_std  <- log1p(win_std)
+    with torch.no_grad():
+        pred_sc = _model(x_t, mask_t, add_t, lengths=len_t).numpy()
+
+    return _scaler_tgt.inverse_transform(pred_sc)[0].tolist()
+
+
+def cleanup_model():
+    global _model, _scaler_add, _scaler_tgt
+    _model = None; _scaler_add = None; _scaler_tgt = None
+    return True
+\'
+
+# ── init_bilstm_model ─────────────────────────────────────────────────────────
+#\' Load the SEIR BiLSTM model
+#\'
+#\' @param model_dir Path to the \\code{model_output_revin_v3} folder containing
+#\'   \\code{model_bilstm.pt}, \\code{scaler_additional.pkl},
+#\'   \\code{scaler_targets.pkl}.
+#\' @param force_reload Reload even if already loaded.
+#\' @return Invisibly \\code{TRUE}.
+#\' @export
+init_bilstm_model <- function(model_dir, force_reload = FALSE) {
+  if (.bilstm_env$loaded && !force_reload) {
+    message("SEIR BiLSTM model already loaded.")
+    return(invisible(TRUE))
   }
 
-  py_run_string(paste0("
-import numpy as np
-import torch
-
-# ── Sequence (RevIN-normalised) ───────────────────────────────────────
-x_norm   = np.array([", paste(x_norm, collapse = ", "), "], dtype='float32')
-X_seq    = torch.tensor(x_norm).unsqueeze(0).unsqueeze(-1)  # (1, T, 1)
-lengths  = torch.tensor([", win_len, "])
-pad_mask = torch.zeros(1, ", win_len, ", dtype=torch.bool)  # no padding
-
-# ── Additional features (6) ───────────────────────────────────────────
-#   scaler_additional was fitted on [n, recov, incub]
-add_raw = np.array([[", n, ", ", recov, ", ", incub, "]], dtype='float32')
-add_sc  = scaler_additional.transform(add_raw)              # (1, 3)
-
-add_features = np.array([[
-    float(add_sc[0, 0]),        # n      (MinMax scaled)
-    float(add_sc[0, 1]),        # recov  (MinMax scaled)
-    float(add_sc[0, 2]),        # incub  (MinMax scaled)
-    ", win_len / T_MAX, ",      # win_len / T_MAX
-    ", log_mean / 10.0, ",      # log(1 + mean) / 10
-    ", log_std  / 10.0, ",      # log(1 + std)  / 10
-]], dtype='float32')
-
-add_tensor = torch.tensor(add_features)
-
-# ── Forward pass ──────────────────────────────────────────────────────
-with torch.no_grad():
-    pred_scaled = model(X_seq, pad_mask, add_tensor, lengths=lengths).numpy()
-
-pred_nat = scaler_targets.inverse_transform(pred_scaled)
-
-beta_hat  = float(pred_nat[0, 0])   # beta = ptran * crate
-R0_hat    = float(pred_nat[0, 1])   # R0
-"))
-
-  data.table(
-    beta  = py$beta_hat,
-    R0    = py$R0_hat,
-    incub = incub           # pass-through — incub was input, not predicted
+  model_dir <- normalizePath(model_dir, winslash = "/", mustWork = TRUE)
+  files <- list(
+    model  = file.path(model_dir, "model_bilstm.pt"),
+    s_add  = file.path(model_dir, "scaler_additional.pkl"),
+    s_tgt  = file.path(model_dir, "scaler_targets.pkl")
   )
+  missing <- names(files)[!vapply(files, file.exists, logical(1))]
+  if (length(missing))
+    stop("Missing files: ", paste(missing, collapse = ", "), call. = FALSE)
+
+  reticulate::py_run_string(.python_code)
+  reticulate::py$load_model(files$model, files$s_add, files$s_tgt)
+
+  .bilstm_env$loaded <- TRUE
+  message("SEIR BiLSTM model loaded (RevIN, variable-length 15-365 days).")
+  invisible(TRUE)
 }
 
-# =====================================================================
-# 3.  simulate_seir()
-#     Runs ModelSEIRCONN via epiworldR and returns the median
-#     daily E→I incidence trajectory across nsims replicates.
-#
-#     Beta decomposition:
-#       BiLSTM predicts beta = ptran * crate (the product only).
-#       ModelSEIRCONN needs them separately.
-#       We fix crate = 1.0  →  ptran = beta.
-#       Any factorisation that keeps ptran * crate = beta gives
-#       the same mean epidemic curve.
-# =====================================================================
+# ── calibrate_seir ────────────────────────────────────────────────────────────
+#\' Predict SEIR parameters from a daily incidence window
+#\'
+#\' @param daily_cases Numeric vector, length 15-365, raw daily incidence counts.
+#\'   Do not normalise — RevIN is applied internally.
+#\' @param population_size Single numeric: population size (n).
+#\' @param recovery_rate Single numeric: recovery rate (e.g. \\code{1/7}).
+#\' @param incubation_days Single numeric: incubation period in days (known).
+#\'
+#\' @return Named numeric vector: \\code{beta}, \\code{R0}.
+#\' @export
+calibrate_seir <- function(daily_cases, population_size,
+                           recovery_rate, incubation_days) {
+  if (!.bilstm_env$loaded)
+    stop("Model not loaded. Call init_bilstm_model() first.", call. = FALSE)
 
-simulate_seir <- function(ptran, crate, incub, n_days, N, recov, prev,
-                          nsims = 100) {
-  model_epi <- ModelSEIRCONN(
-    name              = "BiLSTM reconstruction",
-    n                 = N,
-    prevalence        = prev,
-    contact_rate      = crate,
-    transmission_rate = ptran,
-    incubation_days   = incub,
-    recovery_rate     = recov
+  n <- length(daily_cases)
+  if (!is.numeric(daily_cases) || n < 15 || n > 365 || any(daily_cases < 0))
+    stop("daily_cases must be numeric with 15-365 non-negative values.", call. = FALSE)
+  if (!is.numeric(population_size) || population_size <= 0)
+    stop("population_size must be a positive number.", call. = FALSE)
+  if (!is.numeric(recovery_rate) || recovery_rate <= 0)
+    stop("recovery_rate must be a positive number.", call. = FALSE)
+  if (!is.numeric(incubation_days) || incubation_days <= 0)
+    stop("incubation_days must be a positive number.", call. = FALSE)
+
+  out <- reticulate::py$predict(
+    as.numeric(daily_cases),
+    as.numeric(population_size),
+    as.numeric(recovery_rate),
+    as.numeric(incubation_days)
   )
-
-  saver <- make_saver("transition")
-
-  run_multiple(
-    model_epi,
-    ndays    = n_days,
-    nsims    = nsims,
-    saver    = saver,
-    nthreads = 8
-  )
-
-  sim_results <- run_multiple_get_results(model_epi, nthreads = 8)
-
-  # Median daily E→I transitions across all replicates
-  sim_results$transition %>%
-    filter(from == "Exposed", to == "Infected") %>%
-    group_by(sim_num, date) %>%
-    summarise(counts = sum(counts), .groups = "drop") %>%
-    group_by(date) %>%
-    summarise(median_count = median(counts), .groups = "drop") %>%
-    arrange(date) %>%
-    pull(median_count)
+  names(out) <- c("beta", "R0")
+  out
 }
 
-# =====================================================================
-# 4.  reconstruct_epicurve()
-#     Full pipeline: calibrate → simulate → plot → return results
-# =====================================================================
-
-reconstruct_epicurve <- function(
-    incidence_vec,        # numeric vector — observed daily incidence
-    n,                    # integer        — population size
-    recov,                # numeric        — recovery rate (e.g. 1/7 = 0.143)
-    prevalence,           # numeric        — initial infected fraction (e.g. 1/N)
-    incub,                # numeric        — incubation period in days (known input)
-    n_days      = NULL,   # integer        — simulation length; defaults to length(incidence_vec)
-    T_MAX       = 365,    # integer        — epidemic horizon used during training
-    nsims       = 100     # integer        — stochastic replicates for the simulation
-) {
-
-  # ── Step 1: Predict beta and R0 with BiLSTM ──────────────────────
-  cal <- calibrate_seir_bilstm(
-    incidence_vec = incidence_vec,
-    n             = n,
-    recov         = recov,
-    incub         = incub,
-    T_MAX         = T_MAX
-  )
-
-  beta_hat  <- cal$beta
-  R0_hat    <- cal$R0
-  incub_hat <- cal$incub
-
-  # ── Step 2: Decompose beta → ptran, crate ────────────────────────
-  ptran_hat <- beta_hat     # crate fixed at 1.0  →  ptran = beta / 1
-  crate_hat <- 1.0
-
-  # Consistency check: R0 should ≈ beta / recov
-  R0_check <- beta_hat / recov
-
-  cat(sprintf("\n── BiLSTM calibration ───────────────────────────────\n"))
-  cat(sprintf("  beta   = %.6f\n",  beta_hat))
-  cat(sprintf("  R0     = %.4f  (model)  |  %.4f  (beta/recov)  |  diff = %.4f\n",
-              R0_hat, R0_check, abs(R0_hat - R0_check)))
-  cat(sprintf("  incub  = %.2f days\n", incub_hat))
-  cat(sprintf("  → ptran = %.6f  |  crate = %.2f\n", ptran_hat, crate_hat))
-
-  # ── Step 3: Run SEIR simulation ──────────────────────────────────
-  sim_days  <- if (is.null(n_days)) length(incidence_vec) else n_days
-
-  simulated <- simulate_seir(
-    ptran  = ptran_hat,
-    crate  = crate_hat,
-    incub  = incub_hat,
-    n_days = sim_days,
-    N      = n,
-    recov  = recov,
-    prev   = prevalence,
-    nsims  = nsims
-  )
-
-  simulated <- simulated[-1]   # drop day 0 (epiworldR always includes it)
-
-  # ── Step 4: Align lengths ─────────────────────────────────────────
-  min_len   <- min(length(simulated), length(incidence_vec))
-  simulated <- simulated[1:min_len]
-  observed  <- incidence_vec[1:min_len]
-
-  # ── Step 5: MAE ──────────────────────────────────────────────────
-  mae_per_day <- abs(simulated - observed)
-  mae         <- mean(mae_per_day)
-
-  cat(sprintf("  MAE    = %.2f cases/day  (min %.2f  max %.2f)\n\n",
-              mae, min(mae_per_day), max(mae_per_day)))
-
-  # ── Step 6: Plot ──────────────────────────────────────────────────
-  plot_df <- tibble(
-    day       = 1:min_len,
-    observed  = observed,
-    simulated = simulated
-  )
-
-  subtitle_txt <- sprintf(
-    "N = %d  |  recov = %.4f  |  incub = %.1f days  |  prevalence = %.6f\nBiLSTM → beta = %.5f  |  R0 = %.2f  |  MAE = %.2f cases/day",
-    n, recov, incub_hat, prevalence,
-    beta_hat, R0_hat, mae
-  )
-
-  p <- ggplot(plot_df, aes(x = day)) +
-    geom_line(aes(y = observed,  color = "Observed"),
-              linewidth = 1.2) +
-    geom_point(aes(y = observed, color = "Observed"),
-               size = 2.5, alpha = 0.7) +
-    geom_line(aes(y = simulated, color = "Reconstructed (BiLSTM)"),
-              linewidth = 1.1, linetype = "dashed") +
-    scale_color_manual(
-      values = c("Observed"               = "steelblue",
-                 "Reconstructed (BiLSTM)" = "tomato")
-    ) +
-    labs(
-      title    = "Epidemic Curve Reconstruction — BiLSTM",
-      subtitle = subtitle_txt,
-      x        = "Day",
-      y        = "Daily incidence (E\u2192I transitions)",
-      color    = ""
-    ) +
-    theme_minimal(base_size = 13) +
-    theme(
-      legend.position = "bottom",
-      plot.subtitle   = element_text(size = 9, family = "mono")
-    )
-
-  print(p)
-
-  # ── Return all results invisibly ─────────────────────────────────
-  invisible(list(
-    beta      = beta_hat,
-    R0        = R0_hat,
-    incub     = incub_hat,
-    ptran     = ptran_hat,
-    crate     = crate_hat,
-    simulated = simulated,
-    observed  = observed,
-    mae       = mae,
-    plot      = p
-  ))
+# ── cleanup_model ─────────────────────────────────────────────────────────────
+#\' Unload the model from memory
+#\' @return Invisibly \\code{TRUE}.
+#\' @export
+cleanup_model <- function() {
+  if (!.bilstm_env$loaded) { message("No model loaded."); return(invisible(TRUE)) }
+  try(reticulate::py$cleanup_model(), silent = TRUE)
+  .bilstm_env$loaded <- FALSE
+  message("Model unloaded.")
+  invisible(TRUE)
 }
-
-# =====================================================================
-# 5.  Run
-#     Replace the values below with your actual epidemic data.
-# =====================================================================
-
-incidence_vec <- c(
-  103, 37, 60, 74, 108, 125, 138, 186, 215, 276, 318, 331, 414, 402, 446,
-  454, 405, 401, 373, 334, 285, 241, 219, 156, 140, 108,  93,  82,  73,  78,
-  48,  38,  34,  22,  27,  22,  20,  11,  14,   8,  11,  14,   8,   6,   6,
-  2,   0,   7,   2,   4,   4,   1,   1,   2,   2,   1,   0,   2,   1,   1, 0
-)
-
-n_pop      <- 7087
-recov_rate <- 0.203
-incub_days <- 5.0          # <-- set to your known incubation period
-prevalence <- 1 / n_pop   # initial fraction infected; adjust as needed
-
-result <- reconstruct_epicurve(
-  incidence_vec = incidence_vec,
-  n             = n_pop,
-  recov         = recov_rate,
-  prevalence    = prevalence,
-  incub         = incub_days,
-  nsims         = 100
-)
-
-cat("══════════════════════════════════════════\n")
-cat(sprintf("  beta   : %.6f\n",    result$beta))
-cat(sprintf("  R0     : %.4f\n",    result$R0))
-cat(sprintf("  incub  : %.2f days\n", result$incub))
-cat(sprintf("  MAE    : %.2f cases/day\n", result$mae))
-cat("══════════════════════════════════════════\n")
+#' @keywords internal
+.onAttach <- function(libname, pkgname) {
+  packageStartupMessage(
+    "epiworldRcalibrate (SEIR) loaded.\n",
+    "  1. init_bilstm_model('path/to/model_output_revin_v3')\n",
+    "  2. calibrate_seir(daily_cases, population_size, recovery_rate, incubation_days)"
+  )
+}
