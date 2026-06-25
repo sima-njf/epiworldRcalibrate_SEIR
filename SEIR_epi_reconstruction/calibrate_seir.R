@@ -1,12 +1,12 @@
-#\' @keywords internal
-#\' @importFrom stats setNames
+#' @keywords internal
+#' @importFrom stats setNames
 "_PACKAGE"
 
 .bilstm_env <- new.env(parent = emptyenv())
 .bilstm_env$loaded <- FALSE
 
 # ── Embedded Python ───────────────────────────────────────────────────────────
-.python_code <- \'
+.python_code <- '
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence
@@ -107,17 +107,17 @@ def cleanup_model():
     global _model, _scaler_add, _scaler_tgt
     _model = None; _scaler_add = None; _scaler_tgt = None
     return True
-\'
+'
 
 # ── init_bilstm_model ─────────────────────────────────────────────────────────
-#\' Load the SEIR BiLSTM model
-#\'
-#\' @param model_dir Path to the \\code{model_output_revin_v3} folder containing
-#\'   \\code{model_bilstm.pt}, \\code{scaler_additional.pkl},
-#\'   \\code{scaler_targets.pkl}.
-#\' @param force_reload Reload even if already loaded.
-#\' @return Invisibly \\code{TRUE}.
-#\' @export
+#' Load the SEIR BiLSTM model
+#'
+#' @param model_dir Path to the \code{model_output_revin_v3} folder containing
+#'   \code{model_bilstm.pt}, \code{scaler_additional.pkl},
+#'   \code{scaler_targets.pkl}.
+#' @param force_reload Reload even if already loaded.
+#' @return Invisibly \code{TRUE}.
+#' @export
 init_bilstm_model <- function(model_dir, force_reload = FALSE) {
   if (.bilstm_env$loaded && !force_reload) {
     message("SEIR BiLSTM model already loaded.")
@@ -143,16 +143,16 @@ init_bilstm_model <- function(model_dir, force_reload = FALSE) {
 }
 
 # ── calibrate_seir ────────────────────────────────────────────────────────────
-#\' Predict SEIR parameters from a daily incidence window
-#\'
-#\' @param daily_cases Numeric vector, length 15-365, raw daily incidence counts.
-#\'   Do not normalise — RevIN is applied internally.
-#\' @param population_size Single numeric: population size (n).
-#\' @param recovery_rate Single numeric: recovery rate (e.g. \\code{1/7}).
-#\' @param incubation_days Single numeric: incubation period in days (known).
-#\'
-#\' @return Named numeric vector: \\code{beta}, \\code{R0}.
-#\' @export
+#' Predict SEIR parameters from a daily incidence window
+#'
+#' @param daily_cases Numeric vector, length 15-365, raw daily incidence counts.
+#'   Do not normalise — RevIN is applied internally.
+#' @param population_size Single numeric: population size (n).
+#' @param recovery_rate Single numeric: recovery rate (e.g. \code{1/7}).
+#' @param incubation_days Single numeric: incubation period in days (known).
+#'
+#' @return Named numeric vector: \code{beta}, \code{R0}.
+#' @export
 calibrate_seir <- function(daily_cases, population_size,
                            recovery_rate, incubation_days) {
   if (!.bilstm_env$loaded)
@@ -179,9 +179,9 @@ calibrate_seir <- function(daily_cases, population_size,
 }
 
 # ── cleanup_model ─────────────────────────────────────────────────────────────
-#\' Unload the model from memory
-#\' @return Invisibly \\code{TRUE}.
-#\' @export
+#' Unload the model from memory
+#' @return Invisibly \code{TRUE}.
+#' @export
 cleanup_model <- function() {
   if (!.bilstm_env$loaded) { message("No model loaded."); return(invisible(TRUE)) }
   try(reticulate::py$cleanup_model(), silent = TRUE)
@@ -189,6 +189,8 @@ cleanup_model <- function() {
   message("Model unloaded.")
   invisible(TRUE)
 }
+
+# ── .onAttach ─────────────────────────────────────────────────────────────────
 #' @keywords internal
 .onAttach <- function(libname, pkgname) {
   packageStartupMessage(
