@@ -65,7 +65,7 @@ run_seir_multi <- function(n, prevalence, beta, incub, recov,
                                   freader = data.table::fread)
 
   res$transition |>
-    filter(from == "Susceptible", to == "Exposed", date > 0) |>  # drop day-0 spike
+    filter(from == "Exposed", to == "Infected", date > 0) |>  # drop day-0 spike
     group_by(date) |>
     summarise(
       lower = quantile(counts, 0.025),
@@ -156,22 +156,28 @@ mae_day_df <- bind_rows(mae_day_list)
 
 # -- Plot 1: incidence curves with CI ribbons ---------------------------------
 p1 <- ggplot(curves_df, aes(x = day)) +
-  geom_ribbon(aes(ymin = act_lower,  ymax = act_upper),
-              fill = "#1976D2", alpha = 0.15) +
-  geom_line(aes(y = act_med,  color = "SEIR - Actual Params"), linewidth = 0.7) +
+  # Actual params: blue ribbon + solid line
+  geom_ribbon(aes(ymin = act_lower, ymax = act_upper),
+              fill = "#1976D2", alpha = 0.20) +
+  geom_line(aes(y = act_med, color = "SEIR - Actual Params"),
+            linewidth = 1.1) +
+  # Predicted params: red ribbon + solid line (thicker so it stands out)
   geom_ribbon(aes(ymin = pred_lower, ymax = pred_upper),
-              fill = "#D32F2F", alpha = 0.15) +
+              fill = "#D32F2F", alpha = 0.20) +
   geom_line(aes(y = pred_med, color = "SEIR - BiLSTM Predicted"),
-            linewidth = 0.7, linetype = "dashed") +
-  geom_line(aes(y = obs,      color = "Observed (ABM)"),
-            linewidth = 0.6, linetype = "dotdash") +
+            linewidth = 1.1) +
+  # Observed ABM: thin black line on top
+  geom_line(aes(y = obs, color = "Observed (ABM)"),
+            linewidth = 0.5, alpha = 0.7) +
   facet_wrap(~ panel, scales = "free_y", ncol = 4) +
-  scale_color_manual(values = c(
-    "Observed (ABM)"         = "black",
-    "SEIR - Actual Params"   = "#1976D2",
-    "SEIR - BiLSTM Predicted"= "#D32F2F")) +
+  scale_color_manual(
+    values = c("Observed (ABM)"          = "black",
+               "SEIR - Actual Params"    = "#1976D2",
+               "SEIR - BiLSTM Predicted" = "#D32F2F"),
+    guide  = guide_legend(override.aes = list(linewidth = c(0.5, 1.1, 1.1),
+                                              alpha     = c(0.7, 1.0, 1.0)))) +
   labs(title    = paste0("SEIR Incidence - Actual vs BiLSTM Predicted (", WINDOW, ")"),
-       subtitle = paste0("Ribbons = 95% CI across ", NSIMS,
+       subtitle = paste0("Shaded bands = 95% CI across ", NSIMS,
                          " runs | incub & recov known; only beta predicted"),
        x = "Day", y = "Daily Incidence (new exposures)", color = NULL) +
   theme_bw(base_size = 9) +
@@ -291,19 +297,19 @@ random_df <- bind_rows(random_curves)
 # -- Plot 3: random pipeline comparison with CI ribbons ----------------------
 p3 <- ggplot(random_df, aes(x = day)) +
   geom_ribbon(aes(ymin = true_lower, ymax = true_upper),
-              fill = "#1976D2", alpha = 0.15) +
+              fill = "#1976D2", alpha = 0.20) +
   geom_line(aes(y = true_med, color = "SEIR - True (Random) Params"),
-            linewidth = 0.8) +
+            linewidth = 1.1) +
   geom_ribbon(aes(ymin = pred_lower, ymax = pred_upper),
-              fill = "#D32F2F", alpha = 0.15) +
+              fill = "#D32F2F", alpha = 0.20) +
   geom_line(aes(y = pred_med, color = "SEIR - BiLSTM Predicted"),
-            linewidth = 0.8, linetype = "dashed") +
+            linewidth = 1.1) +
   facet_wrap(~ panel, scales = "free_y", ncol = 3) +
   scale_color_manual(values = c(
     "SEIR - True (Random) Params" = "#1976D2",
     "SEIR - BiLSTM Predicted"     = "#D32F2F")) +
   labs(title    = "Part 2 - Random Parameters: True vs BiLSTM-Predicted SEIR Curves",
-       subtitle = paste0("Ribbons = 95% CI across ", NSIMS,
+       subtitle = paste0("Shaded bands = 95% CI across ", NSIMS,
                          " runs | BiLSTM input = median of true runs"),
        x = "Day", y = "Daily Incidence (new exposures)", color = NULL) +
   theme_bw(base_size = 9) +
@@ -519,23 +525,25 @@ if (nrow(ex_df) > 0) {
   pC <- ggplot(ex_df, aes(x = day)) +
     geom_rect(data = rect_df,
               aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
-              fill = "gold", alpha = 0.15, inherit.aes = FALSE) +
+              fill = "gold", alpha = 0.18, inherit.aes = FALSE) +
     geom_ribbon(aes(ymin = act_lower,  ymax = act_upper),
-                fill = "#1976D2", alpha = 0.15) +
-    geom_line(aes(y = act_med,  color = "Actual params"),  linewidth = 0.7) +
+                fill = "#1976D2", alpha = 0.20) +
+    geom_line(aes(y = act_med,  color = "Actual params"),  linewidth = 1.0) +
     geom_ribbon(aes(ymin = pred_lower, ymax = pred_upper),
-                fill = "#D32F2F", alpha = 0.15) +
-    geom_line(aes(y = pred_med, color = "Predicted params"),
-              linewidth = 0.7, linetype = "dashed") +
+                fill = "#D32F2F", alpha = 0.20) +
+    geom_line(aes(y = pred_med, color = "Predicted params"), linewidth = 1.0) +
     geom_line(aes(y = obs, color = "Observed (ABM)"),
-              linewidth = 0.5, linetype = "dotdash") +
+              linewidth = 0.5, alpha = 0.7) +
     facet_wrap(~ label, ncol = 3, scales = "free_y") +
-    scale_color_manual(values = c("Observed (ABM)"   = "black",
-                                  "Actual params"    = "#1976D2",
-                                  "Predicted params" = "#D32F2F")) +
+    scale_color_manual(
+      values = c("Observed (ABM)"   = "black",
+                 "Actual params"    = "#1976D2",
+                 "Predicted params" = "#D32F2F"),
+      guide  = guide_legend(override.aes = list(linewidth = c(0.5, 1.0, 1.0),
+                                                alpha     = c(0.7, 1.0, 1.0)))) +
     labs(title    = sprintf("Part 3C: Recovered SEIR Curves for sim %d across Window Lengths",
                             EXAMPLE_SID),
-         subtitle = "Gold shading = observation window | Ribbons = 95% CI",
+         subtitle = "Gold shading = observation window | Shaded bands = 95% CI",
          x = "Day", y = "Daily Incidence (new exposures)", color = NULL) +
     theme_bw(base_size = 9) +
     theme(legend.position  = "bottom",
