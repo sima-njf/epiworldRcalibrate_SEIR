@@ -1,5 +1,6 @@
 # =============================================================================
 #  SEIR Calibration Validation — All Windows + Plot Folder Version
+#  (+ zero-tail informativeness tracking)
 #
 #  Part 1:
 #    For every available prediction window:
@@ -7,18 +8,29 @@
 #      - run ModelSEIRCONN with BiLSTM-predicted parameters
 #      - compare incidence curves
 #      - compute per-day MAE
+#      - flag whether the window was INFORMATIVE (had real signal) for each sim
 #      - save plots inside DATA_DIR/plots/<window>/
 #
 #  Part 2:
 #    Random parameter pipeline
 #    - simulate random true SEIR curve
-#    - calibrate_seir()
+#    - calibrate_seir() (now also returns an "informative" attribute)
 #    - simulate with predicted parameters
 #    - save plots inside DATA_DIR/plots/random_pipeline/
 #
 #  SEIR known inputs : n, recov, incub, prevalence
 #  SEIR predicted    : beta, R0
 #  ModelSEIRCONN     : contact_rate = 1, transmission_rate = beta
+#
+#  IMPORTANT ASSUMPTION (see get_window_bounds() below): this script only
+#  receives window NAMES (e.g. "early_015d", "late_365d") from
+#  test_bilstm_predictions.csv, not the exact (t_start, win_len) that was
+#  fed to the model when those predictions were generated. get_window_bounds()
+#  assumes the standard convention early = starts at day 1, late = ends at
+#  day 365, mid = centered. If your TEST_WINDOWS dict in the training
+#  notebook used a different convention, edit get_window_bounds() (or supply
+#  WINDOW_BOUNDS_OVERRIDE) to match it exactly, or the frac_uninformative
+#  numbers below will be computed on the wrong day range.
 # =============================================================================
 
 library(epiworldR)
@@ -32,11 +44,11 @@ library(stringr)
 # =============================================================================
 # Paths and settings
 # =============================================================================
+PROJECT_DIR <- path.expand("~/DeepIMC")
 
-MODEL_DIR <- "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/model"
-DATA_DIR  <- "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction"
-
-PLOT_DIR <- path.expand(file.path(DATA_DIR, "plots"))
+DATA_DIR  <- PROJECT_DIR
+MODEL_DIR <- file.path(PROJECT_DIR, "model")
+PLOT_DIR  <- file.path(PROJECT_DIR, "plots")
 
 dir.create(PLOT_DIR, showWarnings = FALSE, recursive = TRUE)
 
@@ -45,7 +57,58 @@ N_SAMPLE     <- 9     # readable plots; change to 20 if you want more panels
 N_RANDOM     <- 9
 CONTACT_RATE <- 1
 
+# Set to a named list like list(early_015d = c(0, 15), ...) if the day-1
+# convention below doesn't match how TEST_WINDOWS was actually defined.
+WINDOW_BOUNDS_OVERRIDE <- NULL
+
 init_bilstm_model(MODEL_DIR)
+
+# =============================================================================
+# Zero-tail informativeness helpers (same rule used to fix training + the
+# calibrate_seir() package function: 7-day rolling mean, threshold 1 case)
+# =============================================================================
+
+.last_informative_day <- function(daily_cases, k = 7, min_count = 1) {
+  n <- length(daily_cases)
+  if (n < k) {
+    return(if (mean(daily_cases) >= min_count) n else 0L)
+  }
+  roll <- vapply(k:n, function(i) mean(daily_cases[(i - k + 1):i]), numeric(1))
+  below <- which(roll < min_count)
+  if (length(below) == 0) return(n)
+  cut_at <- (k - 1) + below[1]
+  max(cut_at, 0L)
+}
+
+.is_informative <- function(daily_cases, k = 7, min_count = 1,
+                            min_len = 1, min_total_cases = 5) {
+  n <- length(daily_cases)
+  if (n < min_len) return(FALSE)
+  if (sum(daily_cases) < min_total_cases) return(FALSE)
+  if (.last_informative_day(daily_cases, k = k, min_count = min_count) <= 0) return(FALSE)
+  TRUE
+}
+
+# Map a window NAME (e.g. "early_015d") to (t_start, t_end) in the full
+# 365-day observed curve. See the ASSUMPTION note at the top of the file.
+get_window_bounds <- function(window_name, ndays = NDAYS) {
+  if (!is.null(WINDOW_BOUNDS_OVERRIDE) && window_name %in% names(WINDOW_BOUNDS_OVERRIDE)) {
+    b <- WINDOW_BOUNDS_OVERRIDE[[window_name]]
+    return(list(t_start = b[1], t_end = b[1] + b[2]))
+  }
+  regime <- get_window_regime(window_name)
+  len    <- get_window_length(window_name)
+  if (is.na(regime) || is.na(len)) return(list(t_start = 0L, t_end = ndays))
+
+  if (regime == "early") {
+    t_start <- 0L
+  } else if (regime == "late") {
+    t_start <- max(ndays - len, 0L)
+  } else {  # mid -- centered
+    t_start <- max(floor((ndays - len) / 2), 0L)
+  }
+  list(t_start = t_start, t_end = min(t_start + len, ndays))
+}
 
 # =============================================================================
 # Global plot theme
@@ -166,11 +229,11 @@ run_seir_incidence <- function(n, prevalence, beta, incub, recov,
 cat("\n-- Loading test data --\n")
 
 actual <- read.csv(
-  path.expand(file.path(DATA_DIR, "test_actual_parameters.csv"))
+  path.expand(file.path(DATA_DIR, "test_actual_parameters (2).csv"))
 )
 
 preds_all <- read.csv(
-  path.expand(file.path(DATA_DIR, "test_bilstm_predictions.csv"))
+  path.expand(file.path(DATA_DIR, "test_bilstm_predictions (2).csv"))
 )
 
 if (!"window" %in% names(preds_all)) {
@@ -180,7 +243,7 @@ if (!"window" %in% names(preds_all)) {
 np <- reticulate::import("numpy")
 
 inc_raw <- np$load(
-  path.expand(file.path(DATA_DIR, "test_incidence_raw.npy"))
+  path.expand(file.path(DATA_DIR, "test_incidence_raw (2).npy"))
 )
 
 inc_raw <- as.matrix(inc_raw)
@@ -296,8 +359,13 @@ for (WINDOW in WINDOWS) {
     next
   }
 
+  # ── zero-tail fix: work out which day range this window covers, so we
+  # can flag whether each sim's window actually had epidemic signal ──────
+  bounds <- get_window_bounds(WINDOW)
+
   curves_list  <- vector("list", length(common_ids))
   mae_day_list <- vector("list", length(common_ids))
+  inform_list  <- vector("list", length(common_ids))
 
   for (k in seq_along(common_ids)) {
 
@@ -322,6 +390,11 @@ for (WINDOW in WINDOWS) {
 
     act <- cache$act
 
+    # ── zero-tail fix: was the slice of the observed curve fed to the
+    # model for THIS window actually informative for THIS sim? ───────────
+    window_slice <- cache$obs_inc[(bounds$t_start + 1):bounds$t_end]
+    is_inform    <- .is_informative(window_slice)
+
     pred_inc <- run_seir_incidence(
       n          = cache$n,
       prevalence = cache$prevalence,
@@ -339,9 +412,11 @@ for (WINDOW in WINDOWS) {
       window  = WINDOW,
       regime  = get_window_regime(WINDOW),
       win_len = get_window_length(WINDOW),
+      informative = is_inform,
       panel   = sprintf(
-        "sim %d\nbeta %.3f -> %.3f | R0 %.2f -> %.2f | incub %.1fd",
+        "sim %d%s\nbeta %.3f -> %.3f | R0 %.2f -> %.2f | incub %.1fd",
         sid,
+        if (!is_inform) " [uninformative window]" else "",
         act$beta[1],
         prd$beta_pred[1],
         act$R0[1],
@@ -362,14 +437,27 @@ for (WINDOW in WINDOWS) {
       win_len = get_window_length(WINDOW),
       mae     = mae_per_day
     )
+
+    inform_list[[k]] <- data.frame(
+      sim_idx     = sid,
+      window      = WINDOW,
+      informative = is_inform
+    )
   }
 
-  curves_df <- bind_rows(curves_list)
-  mae_day_df <- bind_rows(mae_day_list)
+  curves_df   <- bind_rows(curves_list)
+  mae_day_df  <- bind_rows(mae_day_list)
+  inform_df   <- bind_rows(inform_list)
 
   if (nrow(curves_df) == 0) {
     warning(sprintf("No curves produced for window %s.", WINDOW))
     next
+  }
+
+  frac_uninformative_window <- if (nrow(inform_df) > 0) {
+    mean(!inform_df$informative)
+  } else {
+    NA_real_
   }
 
   # ===========================================================================
@@ -383,6 +471,7 @@ for (WINDOW in WINDOWS) {
       window,
       regime,
       win_len,
+      informative,
       panel,
       Observed_ABM,
       SEIR_Actual_Params,
@@ -436,7 +525,10 @@ for (WINDOW in WINDOWS) {
     scale_y_continuous(labels = comma) +
     labs(
       title = paste0("SEIR Incidence Curves — ", WINDOW),
-      subtitle = "Black = observed ABM | Blue dashed = SEIR with actual beta | Red = SEIR with BiLSTM-predicted beta",
+      subtitle = sprintf(
+        "Black = observed ABM | Blue dashed = SEIR with actual beta | Red = SEIR with BiLSTM-predicted beta\n%.0f%% of sampled sims had an uninformative (near-zero) window for this prediction",
+        100 * frac_uninformative_window
+      ),
       x = "Day",
       y = "Daily incidence"
     ) +
@@ -526,7 +618,11 @@ for (WINDOW in WINDOWS) {
     scale_y_continuous(labels = comma) +
     labs(
       title = paste0("Per-day MAE — ", WINDOW),
-      subtitle = sprintf("Mean ± SD across %d sampled simulations", length(unique(mae_day_df$sim_idx))),
+      subtitle = sprintf(
+        "Mean ± SD across %d sampled simulations | %.0f%% had an uninformative window",
+        length(unique(mae_day_df$sim_idx)),
+        100 * frac_uninformative_window
+      ),
       x = "Day",
       y = "Mean absolute error in daily incidence"
     ) +
@@ -556,6 +652,7 @@ for (WINDOW in WINDOWS) {
       overall_mean = mean(mean_mae, na.rm = TRUE),
       peak_day     = day[which.max(mean_mae)],
       peak_mae     = max(mean_mae, na.rm = TRUE),
+      frac_uninformative = frac_uninformative_window,
       .groups      = "drop"
     )
 
@@ -570,6 +667,12 @@ for (WINDOW in WINDOWS) {
   write.csv(
     mae_avg,
     file.path(WINDOW_DIR, paste0("mae_per_day_", WINDOW_SAFE, ".csv")),
+    row.names = FALSE
+  )
+
+  write.csv(
+    inform_df,
+    file.path(WINDOW_DIR, paste0("informativeness_", WINDOW_SAFE, ".csv")),
     row.names = FALSE
   )
 
@@ -598,6 +701,9 @@ write.csv(
 
 # =============================================================================
 # Plot 4 — Summary: overall MAE by window length and regime
+# (points now sized by frac_uninformative, so a high-MAE window that's
+#  mostly uninformative for the sampled sims is visually distinguishable
+#  from a genuine model weakness on informative data)
 # =============================================================================
 
 if (nrow(all_window_summary_df) > 0) {
@@ -613,14 +719,19 @@ if (nrow(all_window_summary_df) > 0) {
     aes(x = win_len, y = overall_mean, color = regime, group = regime)
   ) +
     geom_line(linewidth = 1.2, alpha = 0.95) +
-    geom_point(size = 3) +
+    geom_point(aes(size = frac_uninformative), alpha = 0.9) +
+    scale_size_continuous(
+      name = "Fraction of sims\nwith uninformative window",
+      range = c(2, 9),
+      labels = percent
+    ) +
     scale_x_continuous(
       breaks = sort(unique(all_window_summary_df$win_len))
     ) +
     scale_y_continuous(labels = comma) +
     labs(
       title = "Overall Incidence MAE Across Prediction Windows",
-      subtitle = "Lower values mean the BiLSTM-predicted parameter curve is closer to the actual-parameter SEIR curve",
+      subtitle = "Lower MAE = BiLSTM-predicted curve closer to actual-parameter SEIR curve.\nLarger points = more of the sampled sims had a near-zero (uninformative) window here -- high MAE there may reflect missing signal, not just model error.",
       x = "Window length used by BiLSTM prediction",
       y = "Overall mean MAE",
       color = "Window regime"
@@ -642,6 +753,7 @@ if (nrow(all_window_summary_df) > 0) {
 
   # ---------------------------------------------------------------------------
   # Bar plot version: easier to compare all window labels
+  # Now with a frac_uninformative label above each bar.
   # ---------------------------------------------------------------------------
 
   p_mae_bar <- all_window_summary_df %>%
@@ -655,10 +767,14 @@ if (nrow(all_window_summary_df) > 0) {
       aes(x = window_label, y = overall_mean, fill = regime)
     ) +
     geom_col(alpha = 0.85) +
-    scale_y_continuous(labels = comma) +
+    geom_text(
+      aes(label = sprintf("%.0f%%\nuninf.", 100 * frac_uninformative)),
+      vjust = -0.3, size = 3.2, color = "grey30"
+    ) +
+    scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.15))) +
     labs(
       title = "Overall MAE for Each Window",
-      subtitle = "Each bar summarizes the mean per-day incidence MAE for one prediction window",
+      subtitle = "Each bar summarizes the mean per-day incidence MAE for one prediction window.\nLabel above each bar = % of sampled sims whose window was uninformative (near-zero).",
       x = "Window",
       y = "Overall mean MAE",
       fill = "Regime"
@@ -741,11 +857,17 @@ for (k in seq_len(N_RANDOM)) {
     incubation_days = rp$incub
   )
 
+  # ── zero-tail fix: capture whether calibrate_seir() flagged this curve
+  # as uninformative, so we can see if that correlates with worse MAE below ──
+  informative_flag <- attr(predicted, "informative")
+  if (is.null(informative_flag)) informative_flag <- NA
+
   beta_pred <- as.numeric(predicted["beta"])
   R0_pred   <- as.numeric(predicted["R0"])
 
   cat(sprintf("    True      : beta=%.4f R0=%.4f\n", rp$beta, rp$R0))
-  cat(sprintf("    Predicted : beta=%.4f R0=%.4f\n", beta_pred, R0_pred))
+  cat(sprintf("    Predicted : beta=%.4f R0=%.4f  (informative window: %s)\n",
+              beta_pred, R0_pred, informative_flag))
 
   pred_inc <- run_seir_incidence(
     n          = rp$n,
@@ -760,9 +882,11 @@ for (k in seq_len(N_RANDOM)) {
   random_curves[[k]] <- data.frame(
     day = 1:NDAYS,
     sim_idx = k,
+    informative = informative_flag,
     panel = sprintf(
-      "sim %d | R0 %.2f -> %.2f\nbeta %.3f -> %.3f | incub %.1fd",
+      "sim %d%s | R0 %.2f -> %.2f\nbeta %.3f -> %.3f | incub %.1fd",
       k,
+      if (isFALSE(informative_flag)) " [uninformative]" else "",
       rp$R0,
       R0_pred,
       rp$beta,
@@ -814,7 +938,7 @@ p_random_big <- ggplot(
   scale_y_continuous(labels = comma) +
   labs(
     title = "Random SEIR Parameters: True vs BiLSTM-Predicted Curves",
-    subtitle = "Blue = SEIR with true random parameters | Red = SEIR with BiLSTM-predicted parameters",
+    subtitle = "Blue = SEIR with true random parameters | Red = SEIR with BiLSTM-predicted parameters\nPanels tagged [uninformative] had a near-zero incidence curve at calibration time",
     x = "Day",
     y = "Daily incidence"
   ) +
@@ -875,10 +999,11 @@ for (sid in unique(random_long$sim_idx)) {
 
 # =============================================================================
 # Part 2 summary
+# (now split by whether calibrate_seir() flagged the window as informative)
 # =============================================================================
 
 part2_summary <- random_df %>%
-  group_by(panel) %>%
+  group_by(panel, informative) %>%
   summarise(
     mae_incidence  = mean(abs(True_Params - Predicted_Params), na.rm = TRUE),
     peak_true      = max(True_Params, na.rm = TRUE),
@@ -899,6 +1024,16 @@ write.csv(
   row.names = FALSE
 )
 
+# Quick console check: does MAE actually differ between informative and
+# uninformative calibrations? (only meaningful if both groups are non-empty)
+if (length(unique(na.omit(part2_summary$informative))) > 1) {
+  informative_check <- part2_summary %>%
+    group_by(informative) %>%
+    summarise(mean_mae = mean(mae_incidence, na.rm = TRUE), n = n(), .groups = "drop")
+  cat("\n-- MAE by informativeness flag (Part 2) --\n")
+  print(informative_check)
+}
+
 # =============================================================================
 # Final saved output message
 # =============================================================================
@@ -914,12 +1049,13 @@ cat("\nMain outputs:\n")
 cat("  plots/<window>/part1_incidence_curves_<window>.png\n")
 cat("  plots/<window>/part1_per_day_mae_<window>.png\n")
 cat("  plots/<window>/individual_incidence_plots/\n")
-cat("  plots/all_windows_mae_summary.csv\n")
+cat("  plots/<window>/informativeness_<window>.csv\n")
+cat("  plots/all_windows_mae_summary.csv (now includes frac_uninformative)\n")
 cat("  plots/all_windows_mae_per_day.csv\n")
-cat("  plots/all_windows_overall_mae_by_length.png\n")
-cat("  plots/all_windows_overall_mae_barplot.png\n")
+cat("  plots/all_windows_overall_mae_by_length.png (points sized by frac_uninformative)\n")
+cat("  plots/all_windows_overall_mae_barplot.png (labeled with % uninformative)\n")
 cat("  plots/random_pipeline/part2_random_pipeline_combined.png\n")
 cat("  plots/random_pipeline/individual_random_pipeline_plots/\n")
-cat("  plots/random_pipeline/part2_random_pipeline_summary.csv\n")
+cat("  plots/random_pipeline/part2_random_pipeline_summary.csv (split by informative flag)\n")
 
 cat("\nFinished successfully.\n")

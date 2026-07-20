@@ -1,2 +1,2 @@
-"window","regime","win_len","n_sims","overall_mean","peak_day","peak_mae"
-"early_030d","early",30,9,6.05479452054795,24,56.4444444444444
+"window","regime","win_len","n_sims","overall_mean","peak_day","peak_mae","frac_uninformative"
+"early_030d","early",30,9,6.11993911719939,22,57.1111111111111,0

@@ -1,2 +1,2 @@
-"window","regime","win_len","n_sims","overall_mean","peak_day","peak_mae"
-"mid_030d","mid",30,9,6.11050228310502,30,49.1111111111111
+"window","regime","win_len","n_sims","overall_mean","peak_day","peak_mae","frac_uninformative"
+"mid_030d","mid",30,9,6.83835616438356,28,51.4444444444444,0.222222222222222

@@ -126,9 +126,9 @@ init_bilstm_model <- function(model_dir, force_reload = FALSE) {
 
   model_dir <- normalizePath(model_dir, winslash = "/", mustWork = TRUE)
   files <- list(
-    model  = file.path(model_dir, "model_bilstm.pt"),
-    s_add  = file.path(model_dir, "scaler_additional.pkl"),
-    s_tgt  = file.path(model_dir, "scaler_targets.pkl")
+    model  = file.path(model_dir, "model_bilstm (1).pt"),
+    s_add  = file.path(model_dir, "scaler_additional (1).pkl"),
+    s_tgt  = file.path(model_dir, "scaler_targets (1).pkl")
   )
   missing <- names(files)[!vapply(files, file.exists, logical(1))]
   if (length(missing))
@@ -142,6 +142,38 @@ init_bilstm_model <- function(model_dir, force_reload = FALSE) {
   invisible(TRUE)
 }
 
+# ── Informativeness check (zero-tail fix, R side) ──────────────────────────────
+# Mirrors the Python informative_window_utils.py used to fix the training
+# pipeline. Rule: 7-day rolling mean must stay >= min_count. This is applied
+# here, at the deployment entry point, because this is where real (possibly
+# zero-tail) curves actually get passed in by callers.
+
+#' Find the last "informative" day of an incidence curve
+#' @keywords internal
+.last_informative_day <- function(daily_cases, k = 7, min_count = 1) {
+  n <- length(daily_cases)
+  if (n < k) {
+    return(if (mean(daily_cases) >= min_count) n else 0L)
+  }
+  roll <- vapply(k:n, function(i) mean(daily_cases[(i - k + 1):i]), numeric(1))
+  below <- which(roll < min_count)
+  if (length(below) == 0) return(n)
+  # roll[j] corresponds to the window ending at day (k - 1 + j)
+  cut_at <- (k - 1) + below[1]
+  max(cut_at, 0L)
+}
+
+#' Is this incidence window informative enough to calibrate from?
+#' @keywords internal
+.is_informative <- function(daily_cases, k = 7, min_count = 1,
+                            min_len = 15, min_total_cases = 5) {
+  n <- length(daily_cases)
+  if (n < min_len) return(FALSE)
+  if (sum(daily_cases) < min_total_cases) return(FALSE)
+  if (.last_informative_day(daily_cases, k = k, min_count = min_count) <= 0) return(FALSE)
+  TRUE
+}
+
 # ── calibrate_seir ────────────────────────────────────────────────────────────
 #' Predict SEIR parameters from a daily incidence window
 #'
@@ -150,11 +182,23 @@ init_bilstm_model <- function(model_dir, force_reload = FALSE) {
 #' @param population_size Single numeric: population size (n).
 #' @param recovery_rate Single numeric: recovery rate (e.g. \code{1/7}).
 #' @param incubation_days Single numeric: incubation period in days (known).
+#' @param auto_trim If TRUE (default FALSE), automatically trim daily_cases
+#'   to its informative prefix before calibrating, using the same rule as
+#'   training (7-day rolling mean, threshold 1 case). If the curve is
+#'   uninformative even after trimming to the minimum length, the call
+#'   proceeds but a warning is issued -- the prediction should not be trusted.
+#' @param warn_uninformative If TRUE (default), issue a warning when the
+#'   input is a near-zero / uninformative window, regardless of auto_trim.
 #'
-#' @return Named numeric vector: \code{beta}, \code{R0}.
+#' @return Named numeric vector: \code{beta}, \code{R0}. If the input was
+#'   flagged as uninformative, this is returned with an additional
+#'   \code{"informative"} attribute set to \code{FALSE} so callers can check
+#'   \code{attr(out, "informative")} programmatically instead of parsing
+#'   warnings.
 #' @export
 calibrate_seir <- function(daily_cases, population_size,
-                           recovery_rate, incubation_days) {
+                           recovery_rate, incubation_days,
+                           auto_trim = FALSE, warn_uninformative = TRUE) {
   if (!.bilstm_env$loaded)
     stop("Model not loaded. Call init_bilstm_model() first.", call. = FALSE)
 
@@ -168,6 +212,28 @@ calibrate_seir <- function(daily_cases, population_size,
   if (!is.numeric(incubation_days) || incubation_days <= 0)
     stop("incubation_days must be a positive number.", call. = FALSE)
 
+  # ── zero-tail check ──────────────────────────────────────────────────────
+  informative <- .is_informative(daily_cases)
+
+  if (auto_trim) {
+    cut <- .last_informative_day(daily_cases)
+    cut <- max(cut, 15L)                 # never go below the model's min length
+    cut <- min(cut, n)
+    daily_cases <- daily_cases[seq_len(cut)]
+    informative <- .is_informative(daily_cases)
+  }
+
+  if (!informative && warn_uninformative) {
+    warning(
+      "daily_cases looks like a near-zero / uninformative window ",
+      "(insufficient recent case counts). The model was trained to be less ",
+      "biased on such windows, but a truly zero-information input still ",
+      "carries no real signal about R0 -- treat this prediction with caution, ",
+      "or pass auto_trim = TRUE to calibrate from the informative prefix only.",
+      call. = FALSE
+    )
+  }
+
   out <- reticulate::py$predict(
     as.numeric(daily_cases),
     as.numeric(population_size),
@@ -175,6 +241,7 @@ calibrate_seir <- function(daily_cases, population_size,
     as.numeric(incubation_days)
   )
   names(out) <- c("beta", "R0")
+  attr(out, "informative") <- informative
   out
 }
 
