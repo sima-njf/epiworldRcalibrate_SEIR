@@ -1,0 +1,69 @@
+Loading required package: parallel
+slurmR default option for `tmp_path` (used to store auxiliar files) set to:
+  /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction
+You can change this and checkout other slurmR options using: ?opts_slurmR, or you could just type "opts_slurmR" on the terminal.
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+Test set: 1000 sims | calibrating: crate, ptran
+Collecting optimizer results...
+Non-null results: 5 / 1000
+Saved: nm_seir_summary.csv, de_seir_summary.csv (+ daily)
+
+========== NelderMead Results ==========
+Attempted / converged : 5 / 5 (100.0%)
+
+--- Parameter recovery (mean %% error) ---
+  crate  :    31.8%   (calibrated)
+  ptran  :  1118.4%   (calibrated)
+  recov  :     0.0%   (known/fixed)
+  beta   :  1008.0%   (derived = crate*ptran)
+  R0     :  1008.0%   (derived = beta/recov)
+  If beta is far more accurate than crate/ptran, that IS the
+  identifiability ridge, not a bug.
+
+Estimates sitting on a bound : 0  <- suspicious if large
+
+--- Curve fit ---
+Mean MAE / median MAE : 16.06 / 17.35
+Mean sMAPE            : 52.30%
+Mean Pearson r        : 0.6950
+
+--- Cost ---
+Mean wall / CPU sec   : 1.00 / 0.99
+Mean objective calls  : 9
+Mean model runs / sim : 28
+
+========== DE Results ==========
+Attempted / converged : 5 / 5 (100.0%)
+
+--- Parameter recovery (mean %% error) ---
+  crate  :    39.6%   (calibrated)
+  ptran  :   124.8%   (calibrated)
+  recov  :     0.0%   (known/fixed)
+  beta   :     1.7%   (derived = crate*ptran)
+  R0     :     1.7%   (derived = beta/recov)
+  If beta is far more accurate than crate/ptran, that IS the
+  identifiability ridge, not a bug.
+
+Estimates sitting on a bound : 0  <- suspicious if large
+
+--- Curve fit ---
+Mean MAE / median MAE : 2.46 / 2.55
+Mean sMAPE            : 23.95%
+Mean Pearson r        : 0.9857
+
+--- Cost ---
+Mean wall / CPU sec   : 417.24 / 415.70
+Mean objective calls  : 2420
+Mean model runs / sim : 7261
+
+Run validate_methods.R to compare all methods.

@@ -1,0 +1,54 @@
+Loading required package: parallel
+slurmR default option for `tmp_path` (used to store auxiliar files) set to:
+  /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction
+You can change this and checkout other slurmR options using: ?opts_slurmR, or you could just type "opts_slurmR" on the terminal.
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+Test set: 4000 sims total (running all)
+Collecting ABC-SMC results...
+Non-null results: 4000 / 4000
+Saved: abcsmc_seir_summary.csv
+Saved: abcsmc_seir_daily.csv
+Saved: abcsmc_seir_trace.csv   (per-generation epsilon / acceptance / ESS)
+
+========== ABC-SMC Results ==========
+Simulations attempted : 4000
+Converged             : 4000 (100.0%)
+Mean generations done : 5.00 / 5
+Mean ESS (of 150)      : 148.4
+Mean final epsilon    : 6.442
+Predicted die-outs    : 0
+Mean MAE              : 2.71
+Median MAE            : 2.56
+Mean sMAPE            : 25.21%
+Mean Pearson r        : 0.9772
+Mean peak timing err  : 5.5 days
+Mean rel peak err     : 6.2%
+Mean beta % err      : 4.3%
+Mean R0 % err        : 4.3%
+95% CI coverage of true beta: 87.7%
+
+--- Cost ---
+Mean wall time / sim  : 92.61 s
+Mean CPU time / sim   : 92.29 s
+Mean model runs / sim : 1672
+
+--- Mean schedule across sims ---
+ generation mean_eps mean_accept mean_ess mean_sims
+          1      NaN      1.0000    150.0     150.0
+          2   22.444      0.3554    148.2     289.0
+          3   13.181      0.3709    148.9     361.2
+          4    8.863      0.3582    149.1     401.1
+          5    7.137      0.3192    148.4     469.7
+Acceptance should fall and epsilon should shrink across generations.
+
+Run compare_all_methods.R to compare all five methods.

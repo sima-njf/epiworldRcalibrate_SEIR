@@ -1,0 +1,351 @@
+# =============================================================================
+#  optimize_seir_submit.R  — Nelder-Mead and Differential Evolution
+#                            over the multi-parameter space
+#
+#  STEP 1 — Submit:   Rscript optimize_seir_submit.R
+#  STEP 2 — Collect:  Rscript optimize_seir_submit.R --collect
+#
+#  Calibrated : SEIR_PARS from seir_common.R (default crate + ptran)
+#  Known      : n, prevalence, incub, and recov unless it is in SEIR_PARS
+#  Derived    : beta = crate * ptran,  R0 = beta / recov
+#
+#  Objective  : MSE(simulated, observed) on days 2..365, averaged over
+#               N_EVAL_SEEDS common random seeds.
+#
+#  Nelder-Mead now operates in dimension >= 2, so it is a real simplex method
+#  rather than the degenerate 1-D line search of the single-parameter study.
+#  It runs on a logit-transformed unconstrained space that maps back inside
+#  the same box DE searches, so both see identical support.
+#
+#  EXPECT: beta recovered well, crate and ptran individually recovered poorly.
+#  The objective is nearly flat along crate*ptran = const. The optimisers will
+#  return a confident point on that ridge with no indication of the ambiguity;
+#  that contrast against the ABC posteriors is the headline result.
+# =============================================================================
+
+PROJECT_DIR <- path.expand(
+  "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction"
+)
+
+SEIR_COMMON <- file.path(PROJECT_DIR, "seir_common.R")
+source(SEIR_COMMON)
+seir_set_libpath()
+
+library(slurmR)
+library(dplyr)
+library(reticulate)
+
+SCRATCH <- file.path("/scratch/general/vast", Sys.getenv("USER"), "slurmR")
+OUT_DIR <- PROJECT_DIR
+dir.create(path.expand(SCRATCH), recursive = TRUE, showWarnings = FALSE)
+
+SLURM_OPTS <- list(
+  account         = "vegayon-np",
+  partition       = "vegayon-np",
+  `cpus-per-task` = 1,
+  `mem-per-cpu`   = "8G",
+  time            = "12:00:00"
+)
+
+NDAYS        <- SEIR_NDAYS
+EVAL_SEED    <- 12345L
+N_EVAL_SEEDS <- 3L
+
+NM_MAXIT   <- 1000L      # raised: the simplex is no longer 1-D
+NM_RELTOL  <- 1e-7
+NM_RESTART <- 2L         # restarts from the previous optimum (standard for NM)
+
+DE_NP      <- 10L * length(SEIR_PARS)   # Storn & Price rule of thumb
+DE_MAXITER <- 120L
+DE_TOL     <- 1e-8
+
+# =============================================================================
+# Load
+# =============================================================================
+
+actual <- read.csv(file.path(PROJECT_DIR, SEIR_TEST_PARAMS_FILE))
+
+np_module <- reticulate::import("numpy")
+inc_raw   <- as.matrix(
+  np_module$load(path.expand(file.path(PROJECT_DIR, SEIR_TEST_INCIDENCE_NPY)))
+)
+stopifnot(nrow(inc_raw) == nrow(actual), ncol(inc_raw) == NDAYS)
+
+need <- c("beta", "R0", "recov", "incub", "n", "prevalence")
+miss <- setdiff(need, names(actual))
+if (length(miss) > 0) {
+  stop(SEIR_TEST_PARAMS_FILE, " is missing columns: ", paste(miss, collapse = ", "))
+}
+
+test_params <- actual
+inc_matrix  <- inc_raw
+
+cat(sprintf("Test set: %d sims | calibrating: %s\n",
+            nrow(test_params), paste(SEIR_PARS, collapse = ", ")))
+
+args         <- commandArgs(trailingOnly = TRUE)
+collect_only <- "--collect" %in% args
+
+# =============================================================================
+# Worker
+# =============================================================================
+
+optimize_one_sim <- function(row_idx, test_params, inc_matrix, seir_common,
+                             ndays, eval_seed, n_eval_seeds) {
+
+  source(seir_common)
+  seir_set_libpath()
+  library(epiworldR)
+  library(DEoptimR)
+
+  s       <- test_params[row_idx, ]
+  sim_idx <- s$sim_idx
+
+  known  <- list(n = s$n, prevalence = s$prevalence, incub = s$incub, recov = s$recov)
+  true_p <- list(beta = s$beta, recov = s$recov)
+
+  obs_inc <- as.numeric(inc_matrix[row_idx, ])
+  obs_cmp <- obs_inc[-1]
+
+  eval_seeds <- eval_seed + seq_len(n_eval_seeds) - 1L
+  bnd        <- seir_bounds_mat()
+
+  n_eval <- 0L
+  BIG    <- .Machine$double.xmax / 1e6
+
+  objective <- function(theta) {
+    n_eval <<- n_eval + 1L
+    theta <- pmin(pmax(theta, bnd$lo), bnd$hi)
+    # Under the (crate, R0) parameterisation an in-box point can imply
+    # ptran > 1, which the simulator cannot represent.
+    if (!seir_feasible(theta, known)) return(BIG)
+    p <- seir_resolve(theta, known)
+    vals <- vapply(eval_seeds, function(sd_) {
+      pred <- seir_run_single(p, ndays = ndays, seed = sd_)
+      mean((pred[-1] - obs_cmp)^2)
+    }, numeric(1))
+    mean(vals)
+  }
+
+  # Shared start: the box centre, nudged until feasible so neither method
+  # begins on an invalid point under the (crate, R0) parameterisation.
+  theta0 <- (bnd$lo + bnd$hi) / 2
+  if (!seir_feasible(theta0, known)) {
+    for (k in 1:200) {
+      cand <- bnd$lo + runif(length(bnd$lo)) * (bnd$hi - bnd$lo)
+      if (seir_feasible(cand, known)) { theta0 <- cand; break }
+    }
+  }
+
+  # ---- Nelder-Mead on the unconstrained logit scale -------------------------
+  cat(sprintf("  [sim_idx %d] Nelder-Mead (D=%d)...\n", sim_idx, length(SEIR_PARS)))
+  n_eval <- 0L
+  t0 <- proc.time()
+  nm_fit <- tryCatch({
+    z <- seir_to_unc(theta0)
+    fn <- function(zz) objective(seir_from_unc(zz))
+    r  <- optim(par = z, fn = fn, method = "Nelder-Mead",
+                control = list(maxit = NM_MAXIT, reltol = NM_RELTOL))
+    # Restarts: NM can stall on a false convergence; restarting from the
+    # current optimum rebuilds the simplex and often improves it.
+    for (k in seq_len(NM_RESTART)) {
+      r <- optim(par = r$par, fn = fn, method = "Nelder-Mead",
+                 control = list(maxit = NM_MAXIT, reltol = NM_RELTOL))
+    }
+    list(ok = TRUE, theta = seir_from_unc(r$par), conv = r$convergence,
+         value = r$value)
+  }, error = function(e) {
+    cat(sprintf("  [sim_idx %d] NM FAILED: %s\n", sim_idx, e$message))
+    list(ok = FALSE, theta = NULL, conv = NA_integer_, value = NA_real_)
+  })
+  nm_t     <- proc.time() - t0
+  nm_evals <- n_eval
+
+  # ---- Differential Evolution on the box -----------------------------------
+  cat(sprintf("  [sim_idx %d] DE (NP=%d, D=%d)...\n",
+              sim_idx, DE_NP, length(SEIR_PARS)))
+  n_eval <- 0L
+  t0 <- proc.time()
+  de_fit <- tryCatch({
+    r <- DEoptimR::JDEoptim(
+      lower = bnd$lo, upper = bnd$hi,
+      fn = function(par) objective(par),
+      NP = DE_NP, maxiter = DE_MAXITER, tol = DE_TOL
+    )
+    list(ok = TRUE, theta = setNames(as.numeric(r$par), SEIR_PARS),
+         conv = r$convergence, value = r$value)
+  }, error = function(e) {
+    cat(sprintf("  [sim_idx %d] DE FAILED: %s\n", sim_idx, e$message))
+    list(ok = FALSE, theta = NULL, conv = NA_integer_, value = NA_real_)
+  })
+  de_t     <- proc.time() - t0
+  de_evals <- n_eval
+
+  # ---- Assemble -------------------------------------------------------------
+  build <- function(fit, method, tt, evals, seed_off) {
+    if (!fit$ok) {
+      out <- seir_metrics(sim_idx, method, obs_cmp, rep(NA_real_, length(obs_cmp)),
+                          true_p, true_p, known, converged = FALSE,
+                          time_sec = unname(tt[["elapsed"]]),
+                          cpu_sec  = unname(tt[["user.self"]] + tt[["sys.self"]]),
+                          n_evals = evals, n_model_runs = evals * n_eval_seeds)
+      out$opt_status <- fit$conv
+      out$opt_value  <- NA_real_
+      return(list(summary = out, cmp = rep(NA_real_, length(obs_cmp))))
+    }
+
+    # Build full p list for running the simulator
+    pred_p_run <- seir_resolve(fit$theta, known)
+    pred_inc   <- seir_run_single(pred_p_run, ndays = ndays, seed = sim_idx + seed_off)
+    pred_cmp   <- pred_inc[-1]
+
+    # pred_p for seir_metrics (only needs beta + recov)
+    pred_beta_val <- pred_p_run$crate * pred_p_run$ptran
+    pred_p_met    <- list(beta = pred_beta_val, recov = known$recov)
+
+    out <- seir_metrics(sim_idx, method, obs_cmp, pred_cmp,
+                        true_p, pred_p_met, known, converged = TRUE,
+                        time_sec = unname(tt[["elapsed"]]),
+                        cpu_sec  = unname(tt[["user.self"]] + tt[["sys.self"]]),
+                        n_evals = evals, n_model_runs = evals * n_eval_seeds + 1L)
+    out$opt_status <- fit$conv
+    out$opt_value  <- fit$value
+    list(summary = out, cmp = pred_cmp)
+  }
+
+  nm_o <- build(nm_fit, "NelderMead", nm_t, nm_evals, 200L)
+  de_o <- build(de_fit, "DE",         de_t, de_evals, 300L)
+
+  mk_daily <- function(cmp, method) {
+    data.frame(sim_idx = sim_idx, method = method, day = 2:ndays,
+               obs_inc = obs_cmp, pred_inc = cmp, stringsAsFactors = FALSE)
+  }
+
+  list(
+    summary = rbind(nm_o$summary, de_o$summary),
+    daily   = rbind(mk_daily(nm_o$cmp, "NelderMead"),
+                    mk_daily(de_o$cmp, "DE"))
+  )
+}
+
+# =============================================================================
+# STEP 1 — Submit
+# =============================================================================
+
+if (!collect_only) {
+  n_sims <- nrow(test_params)
+
+  cat("Preflight: checking optimiser call signatures...\n")
+  local({
+    suppressPackageStartupMessages(library(DEoptimR))
+    d   <- length(SEIR_PARS)
+    tgt <- (seir_bounds_mat()$lo + seir_bounds_mat()$hi) / 2
+    toy <- function(p) sum((p - tgt)^2)
+    nm  <- optim(par = seir_to_unc(tgt * 0.9), method = "Nelder-Mead",
+                 fn = function(z) toy(seir_from_unc(z)),
+                 control = list(maxit = NM_MAXIT, reltol = NM_RELTOL))
+    de  <- DEoptimR::JDEoptim(lower = seir_bounds_mat()$lo,
+                              upper = seir_bounds_mat()$hi,
+                              fn = toy, NP = DE_NP,
+                              maxiter = DE_MAXITER, tol = DE_TOL)
+    cat(sprintf("  NM err %.3e | DE err %.3e (D=%d)\n",
+                toy(seir_from_unc(nm$par)), toy(de$par), d))
+    if (toy(de$par) > 1e-4) stop("Preflight failed: DE did not find the toy optimum.")
+  })
+  cat("Preflight OK.\n\n")
+
+  cat(sprintf("Submitting NM + DE for %d sims | pars: %s\n",
+              n_sims, paste(SEIR_PARS, collapse = ", ")))
+  cat(sprintf("  DE budget: NP=%d x maxiter=%d x %d seeds = up to %d model runs/sim\n",
+              DE_NP, DE_MAXITER, N_EVAL_SEEDS, DE_NP * DE_MAXITER * N_EVAL_SEEDS))
+
+  job <- Slurm_lapply(
+    X   = as.list(seq_len(n_sims)),
+    FUN = function(i) {
+      optimize_one_sim(i, test_params, inc_matrix, SEIR_COMMON,
+                       NDAYS, EVAL_SEED, N_EVAL_SEEDS)
+    },
+    njobs      = min(n_sims, 200),
+    mc.cores   = 1,
+    job_name   = "seir_optimize",
+    plan       = "submit",
+    sbatch_opt = SLURM_OPTS,
+    export     = c("optimize_one_sim", "test_params", "inc_matrix",
+                   "SEIR_COMMON", "NDAYS", "EVAL_SEED", "N_EVAL_SEEDS",
+                   "NM_MAXIT", "NM_RELTOL", "NM_RESTART",
+                   "DE_NP", "DE_MAXITER", "DE_TOL"),
+    tmp_path   = SCRATCH
+  )
+
+  cat("\nJobs submitted. When finished, run:\n")
+  cat("  Rscript optimize_seir_submit.R --collect\n\n")
+  quit(save = "no")
+}
+
+# =============================================================================
+# STEP 2 — Collect
+# =============================================================================
+
+cat("Collecting optimizer results...\n")
+
+job_path    <- file.path(path.expand(SCRATCH), "seir_optimize")
+results_raw <- Slurm_collect(read_slurm_job(job_path), any. = TRUE)
+results_raw <- Filter(Negate(is.null), results_raw)
+cat(sprintf("Non-null results: %d / %d\n", length(results_raw), nrow(test_params)))
+
+all_summary <- bind_rows(lapply(results_raw, `[[`, "summary"))
+all_daily   <- bind_rows(lapply(results_raw, `[[`, "daily"))
+
+nm_summary <- all_summary[all_summary$method == "NelderMead", ]
+de_summary <- all_summary[all_summary$method == "DE", ]
+
+write.csv(nm_summary, file.path(OUT_DIR, "nm_seir_summary.csv"), row.names = FALSE)
+write.csv(de_summary, file.path(OUT_DIR, "de_seir_summary.csv"), row.names = FALSE)
+write.csv(all_daily[all_daily$method == "NelderMead", ],
+          file.path(OUT_DIR, "nm_seir_daily.csv"), row.names = FALSE)
+write.csv(all_daily[all_daily$method == "DE", ],
+          file.path(OUT_DIR, "de_seir_daily.csv"), row.names = FALSE)
+cat("Saved: nm_seir_summary.csv, de_seir_summary.csv (+ daily)\n")
+
+for (mth in c("NelderMead", "DE")) {
+  s  <- all_summary[all_summary$method == mth, ]
+  ok <- s[s$converged %in% TRUE, ]
+  bnd <- seir_bounds_mat()
+
+  cat(sprintf("\n========== %s Results ==========\n", mth))
+  cat(sprintf("Attempted / converged : %d / %d (%.1f%%)\n", nrow(s), nrow(ok),
+              100 * nrow(ok) / max(nrow(s), 1)))
+
+  cat("\n--- Parameter recovery (mean %% error) ---\n")
+  for (nm in SEIR_PARS) {
+    col <- paste0("err_", nm, "_pct")
+    cat(sprintf("  %-6s : %7.1f%%   (calibrated)\n", nm,
+                mean(ok[[col]], na.rm = TRUE)))
+  }
+  cat(sprintf("  %-6s : %7.1f%%   (derived = beta/recov)\n", "R0",
+              mean(ok$err_R0_pct, na.rm = TRUE)))
+  cat("  If beta is far more accurate than crate/ptran, that IS the\n")
+  cat("  identifiability ridge, not a bug.\n")
+
+  n_bound <- 0L
+  for (i in seq_along(SEIR_PARS)) {
+    col <- paste0("pred_", SEIR_PARS[i])
+    n_bound <- n_bound + sum(ok[[col]] <= bnd$lo[i] * 1.001 |
+                             ok[[col]] >= bnd$hi[i] * 0.999, na.rm = TRUE)
+  }
+  cat(sprintf("\nEstimates sitting on a bound : %d  <- suspicious if large\n", n_bound))
+
+  cat("\n--- Curve fit ---\n")
+  cat(sprintf("Mean MAE / median MAE : %.2f / %.2f\n",
+              mean(ok$mae, na.rm = TRUE), median(ok$mae, na.rm = TRUE)))
+  cat(sprintf("Mean sMAPE            : %.2f%%\n", mean(ok$smape, na.rm = TRUE)))
+  cat(sprintf("Mean Pearson r        : %.4f\n", mean(ok$pearson_r, na.rm = TRUE)))
+
+  cat("\n--- Cost ---\n")
+  cat(sprintf("Mean wall / CPU sec   : %.2f / %.2f\n",
+              mean(ok$time_sec, na.rm = TRUE), mean(ok$cpu_sec, na.rm = TRUE)))
+  cat(sprintf("Mean objective calls  : %.0f\n", mean(ok$n_evals, na.rm = TRUE)))
+  cat(sprintf("Mean model runs / sim : %.0f\n", mean(ok$n_model_runs, na.rm = TRUE)))
+}
+
+cat("\nRun validate_methods.R to compare all methods.\n")

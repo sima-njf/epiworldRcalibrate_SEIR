@@ -1,0 +1,2 @@
+"dataset","n_pop","incub_days","recov_rate","prevalence","wave_start","wave_end","n_days","peak_cases","total_cases","note"
+"utah_covid_wave1",3271616,5,0.1,3.05659343883879e-07,"2020-03-18","2021-03-17",365,4706,380283,"Daily confirmed cases used as proxy for E->I incidence. Expect systematic under-count and ~5-day reporting lag."

@@ -1,0 +1,57 @@
+{
+  "T_MAX": 365,
+  "MIN_DAYS": 15,
+  "MIN_START_OFFSET": 7,
+  "normalization": "RevIN (per-window z-score)",
+  "targets": {
+    "names": [
+      "beta",
+      "R0"
+    ],
+    "scale_": [
+      0.8587228059768677,
+      0.25000372529029846
+    ],
+    "min_": [
+      -0.06321875005960464,
+      -0.25001418590545654
+    ]
+  },
+  "additional": {
+    "names": [
+      "n",
+      "recov",
+      "incub"
+    ],
+    "scale_": [
+      0.00019999999494757503,
+      5.586826324462891,
+      0.055561620742082596
+    ],
+    "min_": [
+      -1.0,
+      -0.3966721296310425,
+      -0.1667010635137558
+    ]
+  },
+  "sample_size_used": 10000,
+  "config": {
+    "hidden": 96,
+    "num_layers": 2,
+    "lstm_dropout": 0.36870712066622346,
+    "head_dropout": 0.11667075294454643,
+    "additional_dim": 6,
+    "output_dim": 2,
+    "lr": 0.005308970400531673,
+    "weight_decay": 0.0002088510714085449,
+    "warmup_frac": 0.029925364367232303,
+    "batch_size": 32,
+    "max_epochs": 200,
+    "lambda_phys": 0.05,
+    "windows_per_sim": 3,
+    "sample_size": 10000,
+    "best_val_loss": 0.060104739382863044,
+    "optuna_best_val_loss": 0.06041110137104988,
+    "n_trials": 30
+  }
+}

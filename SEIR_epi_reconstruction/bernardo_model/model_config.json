@@ -1,0 +1,51 @@
+{
+  "architecture": {
+    "hidden": 64,
+    "num_layers": 3,
+    "lstm_dropout": 0.2785959870842575,
+    "head_dropout": 0.03892946900532138,
+    "additional_dim": 10,
+    "output_dim": 2
+  },
+  "training": {
+    "lr": 0.004470617342770052,
+    "weight_decay": 0.0009736177668772975,
+    "warmup_frac": 0.021332177096339618,
+    "batch_size": 32,
+    "windows_per_sim": 12
+  },
+  "training_extra": {
+    "max_epochs": 200,
+    "epochs_completed": 88,
+    "lambda_phys": 0.05,
+    "sample_size": 10000,
+    "best_val_loss": 0.057583377256989476,
+    "optuna_best_val_loss": 0.05738603039085865,
+    "n_trials": 30,
+    "sampling": "informative-window rejection (flat windows excluded)"
+  },
+  "features": {
+    "additional_vector": [
+      "n",
+      "recov",
+      "incub",
+      "win_len/T_MAX",
+      "log_mean/10",
+      "log_std/10",
+      "shape_logslope",
+      "shape_curvature",
+      "shape_argmax_frac",
+      "shape_late_over_early"
+    ],
+    "t_start": "NOT USED -- pinned by team 2026-08-06 (not observable in real surveillance). See deepimc/RESULTS_LOG.md 5f."
+  },
+  "data": {
+    "T_MAX": 365,
+    "MIN_DAYS": 15,
+    "MIN_START_OFFSET": 7,
+    "normalization": "RevIN (per-window z-score)",
+    "n_sims": 20000,
+    "split": "train_test_split(arange(N_SIMS), test_size=0.2, random_state=42)"
+  },
+  "provenance": "python_training_models/production_model/ (exp_production.py)"
+}

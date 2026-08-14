@@ -1,0 +1,70 @@
+theta     : 20000 rows x 9 cols
+  columns : n, initial_infected, preval, crate, incub, recov, R0, ptran, beta 
+incidence : 20000 rows x 365 cols
+
+========== Source data checks ==========
+beta == crate*ptran   : max rel gap 1.023e-14  OK
+R0 == beta/recov      : max rel gap 1.244e-14  OK
+preval == init/n      : max abs gap 5.551e-16  OK
+ptran within (0, 1]   : 0 violations
+
+========== Sampling pool ==========
+Existing test set vs data_construction theta, per column:
+  n      : 1.0000
+  recov  : 1.0000
+  incub  : 1.0000
+=> Verified. Sampling from the 4000 held-out sims.
+
+Sampled 1000 sims (seed 2024)
+
+========== Incidence definition check ==========
+Simulating with the true parameters and comparing both conventions.
+  sim 6223: obs peak 39 | S->E 28 | E->I 37
+  sim 9442: obs peak 3 | S->E 10 | E->I 1
+  sim 8426: obs peak 16 | S->E 7 | E->I 13
+  sim 9618: obs peak 67 | S->E 47 | E->I 57
+  sim 12387: obs peak 18 | S->E 14 | E->I 1
+  sim 14009: obs peak 1 | S->E 9 | E->I 1
+
+Mean |peak-day error|  S->E 9.83  |  E->I 5.67
+Mean correlation       S->E 0.8707 |  E->I 0.9881
+=> incidence_seir_365.csv looks like E->I
+
+========== Writing ==========
+  backed up test_actual_parameters.csv -> test_actual_parameters.csv.bak_20260803_174325
+  backed up test_incidence_raw.npy -> test_incidence_raw.npy.bak_20260803_174325
+  wrote test_actual_parameters.csv
+None
+  wrote test_incidence_raw.npy
+  wrote test_incidence_raw.csv (fallback)
+  npy round-trip: 1000 x 365, max diff 0.000e+00
+
+========== Test-set ranges ==========
+  n          : [5006, 9999]  median 7546
+  prevalence : [0.010416, 0.39252]  median 0.1415
+  crate      : [5.0024, 14.981]  median 9.872
+  ptran      : [0.006749, 0.22019]  median 0.045722
+  recov      : [0.071026, 0.24963]  median 0.16005
+  incub      : [3.0063, 20.984]  median 11.766
+  beta       : [0.074946, 1.2008]  median 0.43088
+  R0         : [1.0068, 4.9934]  median 2.9991
+
+crate varies 3.0x | ptran varies 32.6x | beta varies 16.0x
+
+========== Paste into seir_common.R ==========
+SEIR_BOUNDS <- list(
+  crate = c(4.0046, 15.979),
+  ptran = c(0, 0.24153),
+  recov = c(0.053166, 0.26749),
+  R0    = c(0.60813, 5.3921)
+)
+
+Next:
+  1. paste the bounds above into seir_common.R
+  2. Rscript verify_parameter_ranges.R
+  3. Rscript abc_seir_submit.R / abcsmc_seir_submit.R / optimize_seir_submit.R
+  4. ... --collect each, then Rscript validate_methods.R
+
+NOTE: any existing test_bilstm_predictions_tuned.csv refers to the OLD
+test set. Regenerate BiLSTM predictions for these sim_idx values, or
+validate_methods.R will simply omit BiLSTM.

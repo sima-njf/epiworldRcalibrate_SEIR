@@ -1,0 +1,47 @@
+Loading required package: parallel
+slurmR default option for `tmp_path` (used to store auxiliar files) set to:
+  /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction
+You can change this and checkout other slurmR options using: ?opts_slurmR, or you could just type "opts_slurmR" on the terminal.
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+Test set: 1000 sims | calibrating: crate, ptran
+Collecting ABC-MCMC results...
+Non-null results: 1000 / 1000
+Saved: abc_seir_summary.csv / abc_seir_daily.csv
+
+========== ABC-MCMC Results ==========
+Attempted / converged : 1000 / 1000 (100.0%)
+Mean acceptance rate  : 0.373
+Chains below 2% accept: 0  <- these did not explore
+
+--- Parameter recovery (mean %% error of the posterior median) ---
+  crate  :    47.2%   (calibrated)
+  ptran  :   177.4%   (calibrated)
+  recov  :     0.0%   (known/fixed)
+  beta   :    35.3%   (derived)
+  R0     :    35.3%   (derived)
+
+--- 95%% credible interval coverage (nominal 95%%) ---
+  crate  :  89.0%
+  ptran  :  95.4%
+  beta   : 100.0%
+  R0     : 100.0%
+
+--- Identifiability signature ---
+Mean posterior cor(crate, ptran) : -0.636
+Mean posterior CV: crate 0.693 | ptran 0.847 | beta 0.593
+
+--- Cost ---
+Mean wall / CPU sec   : 128.56 / 128.10
+Mean model runs / sim : 2211
+
+Run validate_methods.R to compare all methods.

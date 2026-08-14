@@ -1,0 +1,60 @@
+Loading required package: parallel
+slurmR default option for `tmp_path` (used to store auxiliar files) set to:
+  /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction
+You can change this and checkout other slurmR options using: ?opts_slurmR, or you could just type "opts_slurmR" on the terminal.
+
+Attaching package: ‘dplyr’
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+Test set: 1000 sims | calibrating: crate, ptran
+Collecting ABC-SMC results...
+Non-null results: 1000 / 1000
+Saved: abcsmc_seir_particles.csv  (final posterior clouds)
+Saved: abcsmc_seir_summary.csv / _daily.csv / _trace.csv
+
+========== ABC-SMC Results ==========
+Attempted / converged : 1000 / 837 (83.7%)
+Mean generations      : 6.00 / 6
+Mean ESS (of 200)      : 176.8
+
+--- Parameter recovery (mean %% error of the posterior median) ---
+  crate  :    49.2%   (calibrated)
+  ptran  :   119.4%   (calibrated)
+  recov  :     0.0%   (known/fixed)
+  beta   :     5.9%   (derived)
+  R0     :     5.9%   (derived)
+
+--- 95%% credible interval coverage (nominal 95%%) ---
+  crate  : 100.0%
+  ptran  : 100.0%
+  beta   : 100.0%
+  R0     : 100.0%
+
+--- Identifiability signature ---
+Mean posterior cor(crate, ptran) : -0.741
+Mean posterior CV: crate 0.745 | ptran 0.777 | beta 0.207
+A strong negative correlation with CV(beta) << CV(crate) is the ridge:
+the data pin down the product but not the factors. This is the result
+no point estimator can express.
+
+--- Cost ---
+Mean wall / CPU sec   : 227.94 / 227.11
+Mean model runs / sim : 4253
+
+--- Mean schedule across sims ---
+ generation mean_eps mean_accept mean_ess mean_sims
+          1      NaN     1.00000    200.0     200.0
+          2    58.71     0.22319    192.1     415.4
+          3    48.20     0.19018    190.1     524.7
+          4    35.25     0.12579    187.0     722.3
+          5    22.44     0.09016    184.1     995.3
+          6    13.36     0.07026    176.8    1394.4
+
+Run validate_methods.R to compare all methods.

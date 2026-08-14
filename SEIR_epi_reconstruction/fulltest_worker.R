@@ -1,11 +1,15 @@
 # =============================================================================
-#  fulltest_worker.R
+#  fulltest_worker.R  — hypertuned BiLSTM
 #  Worker function: evaluate one sim_idx across ALL available windows.
 #  Returns:
 #    $metrics   — one row per (sim x window): parameter + curve summary errors
 #    $mae_day   — one row per (sim x window x day): per-day |act - pred|
 #
 #  Sourced by fulltest_submit.R before Slurm_lapply().
+#  NOTE: day 1 is included in raw data but excluded from plots in submit script.
+#
+#  INCIDENCE DEFINITION: Exposed -> Infected (E->I) transitions, consistent
+#  with seir_common.R and the training data. plot_incidence() is NOT used.
 # =============================================================================
 
 eval_one_sim <- function(sim_idx) {
@@ -16,47 +20,46 @@ eval_one_sim <- function(sim_idx) {
     library(reticulate)
   })
 
-  PROJECT_DIR <- path.expand("~/DeepIMC")
-  DATA_DIR    <- PROJECT_DIR
+  PROJECT_DIR <- path.expand(
+    "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction"
+  )
 
-  NDAYS        <- 365L
-  CONTACT_RATE <- 1
+  source(file.path(PROJECT_DIR, "seir_common.R"))
+  seir_set_libpath()
+
+  NDAYS <- SEIR_NDAYS
 
   # ---------------------------------------------------------------------------
-  # Load test data
+  # Helper: single SEIR run -> E->I daily incidence (days 1-365)
+  # Uses seir_build and seir_incidence_e2i from seir_common.R for consistency
+  # with training data and all other calibration scripts.
+  # beta is decomposed as: crate = max(beta, 1.0), ptran = beta / crate
+  # This ensures ptran <= 1 while preserving the effective beta.
   # ---------------------------------------------------------------------------
-  actual    <- read.csv(path.expand(file.path(DATA_DIR, "test_actual_parameters (2).csv")))
-  preds_all <- read.csv(path.expand(file.path(DATA_DIR, "test_bilstm_predictions (2).csv")))
+  run_seir_e2i <- function(n, prevalence, beta, incub, recov, seed = 1L) {
+    crate <- max(beta, 1.0)
+    ptran <- beta / crate
+    p <- list(
+      n          = n,
+      prevalence = prevalence,
+      crate      = crate,
+      ptran      = ptran,
+      incub      = incub,
+      recov      = recov
+    )
+    seir_run_single(p, ndays = NDAYS, seed = as.integer(seed))
+  }
+
+  # ---------------------------------------------------------------------------
+  # Load test data (tuned model predictions)
+  # ---------------------------------------------------------------------------
+  actual    <- read.csv(path.expand(file.path(PROJECT_DIR, SEIR_TEST_PARAMS_FILE)))
+  preds_all <- read.csv(path.expand(file.path(PROJECT_DIR, "test_bilstm_predictions_tuned.csv")))
 
   np      <- reticulate::import("numpy")
   inc_raw <- as.matrix(
-    np$load(path.expand(file.path(DATA_DIR, "test_incidence_raw (2).npy")))
+    np$load(path.expand(file.path(PROJECT_DIR, SEIR_TEST_INCIDENCE_NPY)))
   )
-
-  # ---------------------------------------------------------------------------
-  # Helper: single ModelSEIRCONN run → daily incidence vector
-  # ---------------------------------------------------------------------------
-  run_seir_single <- function(n, prevalence, beta, incub, recov, seed = 1L) {
-    n_int <- max(as.integer(round(n)), 10L)
-    prev  <- max(min(prevalence, 1.0), 1.0 / n_int)
-
-    model <- ModelSEIRCONN(
-      name              = "sim",
-      n                 = n_int,
-      prevalence        = prev,
-      contact_rate      = CONTACT_RATE,
-      transmission_rate = max(beta / CONTACT_RATE, 1e-6),
-      incubation_days   = max(incub, 1.0),
-      recovery_rate     = max(recov, 1e-6)
-    )
-    verbose_off(model)
-    run(model, ndays = NDAYS + 1L, seed = as.integer(seed))
-
-    inc <- plot_incidence(model, plot = FALSE)[, 2]
-    inc <- inc[-1]   # drop day-0 init spike
-    if (length(inc) < NDAYS) inc <- c(inc, rep(0L, NDAYS - length(inc)))
-    as.numeric(inc[1:NDAYS])
-  }
 
   # ---------------------------------------------------------------------------
   # Look up this sim
@@ -72,14 +75,12 @@ eval_one_sim <- function(sim_idx) {
   incub      <- act$incub[1]
   prevalence <- act$prevalence[1]
 
-  # Actual-parameter SEIR curve (computed once, reused for all windows)
   act_inc <- tryCatch(
-    run_seir_single(n, prevalence, act$beta[1], incub, recov, seed = sid),
+    run_seir_e2i(n, prevalence, act$beta[1], incub, recov, seed = sid),
     error = function(e) NULL
   )
   if (is.null(act_inc)) return(NULL)
 
-  # Observed ABM incidence
   obs_inc <- as.numeric(inc_raw[mat_row, ])
 
   # ---------------------------------------------------------------------------
@@ -98,7 +99,7 @@ eval_one_sim <- function(sim_idx) {
     if (nrow(prd) == 0) next
 
     pred_inc <- tryCatch(
-      run_seir_single(n, prevalence, prd$beta_pred[1], incub, recov, seed = sid),
+      run_seir_e2i(n, prevalence, prd$beta_pred[1], incub, recov, seed = sid),
       error = function(e) NULL
     )
     if (is.null(pred_inc)) next
@@ -108,7 +109,6 @@ eval_one_sim <- function(sim_idx) {
 
     mae_vec <- abs(act_inc - pred_inc)
 
-    # Summary metrics (one row per sim x window)
     metric_rows[[i]] <- data.frame(
       sim_idx        = sid,
       window         = win_tag,
@@ -131,7 +131,6 @@ eval_one_sim <- function(sim_idx) {
       stringsAsFactors = FALSE
     )
 
-    # Per-day incidence + MAE (one row per sim x window x day)
     mae_day_rows[[i]] <- data.frame(
       sim_idx  = sid,
       window   = win_tag,

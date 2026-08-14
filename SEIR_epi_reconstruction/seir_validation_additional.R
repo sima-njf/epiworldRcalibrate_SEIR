@@ -1,5 +1,5 @@
 # =============================================================================
-#  SEIR Calibration Validation — with run_multiple (uncertainty bands)
+#  SEIR Calibration Validation — hypertuned BiLSTM (Optuna)
 #
 #  Part 1 — Test set: run ModelSEIRCONN with actual vs BiLSTM-predicted
 #            parameters, compare incidence curves + 95% CI, per-day MAE
@@ -10,6 +10,8 @@
 #
 #  Part 3 — Window analysis: inference across all 18 windows
 #            (6 lengths x 3 regimes: early / mid / late)
+#
+#  NOTE: Day 1 of simulation is excluded from all plots (initialization effect).
 #
 #  SEIR known inputs : n, recov, incub, prevalence
 #  SEIR predicted    : beta, R0
@@ -22,6 +24,11 @@ library(dplyr)
 library(tidyr)
 library(patchwork)
 
+# -- Source calibrate_seir if not already loaded ------------------------------
+if (!exists("init_bilstm_model")) {
+  source(path.expand("~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/calibrate_seir.R"))
+}
+
 # -- Paths --------------------------------------------------------------------
 MODEL_DIR <- "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/model"
 DATA_DIR  <- "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction"
@@ -29,7 +36,7 @@ DATA_DIR  <- "~/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction"
 NDAYS    <- 365
 N_SAMPLE <- 20
 WINDOW       <- "late_365d"
-CONTACT_RATE <- 1      # change freely: transmission_rate = beta / CONTACT_RATE
+CONTACT_RATE <- 1
 NSIMS    <- 500
 NTHREADS <- 4
 
@@ -38,7 +45,6 @@ init_bilstm_model(MODEL_DIR)
 
 # =============================================================================
 # Helper: run ModelSEIRCONN NSIMS times, return median + 95% CI per day
-# force of infection = contact_rate * (beta/contact_rate) * I/N = beta*I/N always
 # =============================================================================
 run_seir_multi <- function(n, prevalence, beta, incub, recov,
                            ndays = NDAYS, nsims = NSIMS, nthreads = NTHREADS,
@@ -58,14 +64,14 @@ run_seir_multi <- function(n, prevalence, beta, incub, recov,
   verbose_off(model)
 
   saver <- make_saver("transition")
-  run_multiple(model, ndays = ndays + 1L, nsims = nsims,  # +1: drop day-0 init spike
+  run_multiple(model, ndays = ndays + 1L, nsims = nsims,
                saver = saver, nthreads = nthreads)
 
   res <- run_multiple_get_results(model, nthreads = nthreads,
                                   freader = data.table::fread)
 
   res$transition |>
-    filter(from == "Exposed", to == "Infected", date > 0) |>  # drop day-0 spike
+    filter(from == "Exposed", to == "Infected", date > 0) |>
     group_by(date) |>
     summarise(
       lower = quantile(counts, 0.025),
@@ -84,7 +90,7 @@ run_seir_multi <- function(n, prevalence, beta, incub, recov,
 
 cat("\n-- Part 1: loading test data --\n")
 actual    <- read.csv(path.expand(file.path(DATA_DIR, "test_actual_parameters.csv")))
-preds_all <- read.csv(path.expand(file.path(DATA_DIR, "test_bilstm_predictions.csv")))
+preds_all <- read.csv(path.expand(file.path(DATA_DIR, "test_bilstm_predictions_tuned.csv")))
 
 np      <- reticulate::import("numpy")
 inc_raw <- np$load(path.expand(file.path(DATA_DIR, "test_incidence_raw.npy")))
@@ -115,12 +121,10 @@ for (k in seq_along(sample_ids)) {
   mat_row <- which(actual$sim_idx == sid)
   obs_inc <- as.numeric(inc_raw[mat_row, ])
 
-  # ModelSEIRCONN x NSIMS with ACTUAL beta
   act_q <- run_seir_multi(
     n = n, prevalence = prevalence,
     beta = act$beta[1], incub = incub, recov = recov, seed = sid)
 
-  # ModelSEIRCONN x NSIMS with BiLSTM PREDICTED beta
   pred_q <- run_seir_multi(
     n = n, prevalence = prevalence,
     beta = prd$beta_pred[1], incub = incub, recov = recov, seed = sid)
@@ -154,19 +158,16 @@ for (k in seq_along(sample_ids)) {
 curves_df  <- bind_rows(curves_list)
 mae_day_df <- bind_rows(mae_day_list)
 
-# -- Plot 1: incidence curves with CI ribbons ---------------------------------
-p1 <- ggplot(curves_df, aes(x = day)) +
-  # Actual params: blue ribbon + solid line
+# -- Plot 1: incidence curves (day > 1) ---------------------------------------
+p1 <- ggplot(curves_df |> filter(day > 1), aes(x = day)) +
   geom_ribbon(aes(ymin = act_lower, ymax = act_upper),
               fill = "#1976D2", alpha = 0.20) +
   geom_line(aes(y = act_med, color = "SEIR - Actual Params"),
             linewidth = 1.1) +
-  # Predicted params: red ribbon + solid line (thicker so it stands out)
   geom_ribbon(aes(ymin = pred_lower, ymax = pred_upper),
               fill = "#D32F2F", alpha = 0.20) +
   geom_line(aes(y = pred_med, color = "SEIR - BiLSTM Predicted"),
             linewidth = 1.1) +
-  # Observed ABM: thin black line on top
   geom_line(aes(y = obs, color = "Observed (ABM)"),
             linewidth = 0.5, alpha = 0.7) +
   facet_wrap(~ panel, scales = "free_y", ncol = 4) +
@@ -176,9 +177,9 @@ p1 <- ggplot(curves_df, aes(x = day)) +
                "SEIR - BiLSTM Predicted" = "#D32F2F"),
     guide  = guide_legend(override.aes = list(linewidth = c(0.5, 1.1, 1.1),
                                               alpha     = c(0.7, 1.0, 1.0)))) +
-  labs(title    = paste0("SEIR Incidence - Actual vs BiLSTM Predicted (", WINDOW, ")"),
+  labs(title    = paste0("SEIR Incidence - Actual vs BiLSTM Predicted [tuned] (", WINDOW, ")"),
        subtitle = paste0("Shaded bands = 95% CI across ", NSIMS,
-                         " runs | incub & recov known; only beta predicted"),
+                         " runs | Days 2-365 shown"),
        x = "Day", y = "Daily Incidence (new exposures)", color = NULL) +
   theme_bw(base_size = 9) +
   theme(legend.position  = "bottom",
@@ -191,8 +192,9 @@ ggsave(path.expand(file.path(DATA_DIR, "part1_seir_incidence_curves.png")),
        p1, width = 18, height = 14, dpi = 150)
 print(p1)
 
-# -- Plot 2: per-day MAE (on medians) ----------------------------------------
+# -- Plot 2: per-day MAE (day > 1) --------------------------------------------
 mae_avg <- mae_day_df |>
+  filter(day > 1) |>
   group_by(day) |>
   summarise(mean_mae = mean(mae), sd_mae = sd(mae), .groups = "drop")
 
@@ -202,7 +204,8 @@ p2 <- ggplot(mae_avg, aes(x = day)) +
               fill = "#D32F2F", alpha = 0.15) +
   geom_line(aes(y = mean_mae), color = "#D32F2F", linewidth = 0.9) +
   labs(title    = "Per-day MAE: Actual-Param vs Predicted-Param SEIR (medians)",
-       subtitle = sprintf("Mean +/- SD across %d sampled simulations", N_SAMPLE),
+       subtitle = sprintf("Mean +/- SD across %d sampled simulations | Days 2-365 shown",
+                          N_SAMPLE),
        x = "Day", y = "MAE (incidence)") +
   theme_bw(base_size = 11) +
   theme(panel.grid.minor = element_blank(),
@@ -251,13 +254,11 @@ for (k in seq_len(N_RANDOM)) {
   cat(sprintf("\n  [%d/%d]  n=%d  beta=%.3f  recov=%.3f  incub=%.1f  R0=%.2f\n",
               k, N_RANDOM, rp$n, rp$beta, rp$recov, rp$incub, rp$R0))
 
-  # Step 1: simulate with TRUE params x NSIMS
   true_q <- run_seir_multi(
     n = rp$n, prevalence = rp$prevalence,
     beta = rp$beta, incub = rp$incub, recov = rp$recov,
     ndays = NDAYS_RAN, seed = k)
 
-  # Step 2: feed the MEDIAN into BiLSTM
   predicted <- calibrate_seir(
     daily_cases     = true_q$med,
     population_size = rp$n,
@@ -268,7 +269,6 @@ for (k in seq_len(N_RANDOM)) {
   cat(sprintf("    Predicted : beta=%.4f  R0=%.4f\n",
               predicted["beta"], predicted["R0"]))
 
-  # Step 3: simulate with PREDICTED beta (incub and recov are known)
   pred_q <- run_seir_multi(
     n = rp$n, prevalence = rp$prevalence,
     beta  = predicted["beta"],
@@ -294,8 +294,26 @@ for (k in seq_len(N_RANDOM)) {
 
 random_df <- bind_rows(random_curves)
 
-# -- Plot 3: random pipeline comparison with CI ribbons ----------------------
-p3 <- ggplot(random_df, aes(x = day)) +
+# -- Summary CSV --------------------------------------------------------------
+random_summary <- random_df |>
+  filter(day > 1) |>
+  group_by(panel) |>
+  summarise(
+    mae_medians    = mean(abs(true_med - pred_med)),
+    peak_true      = max(true_med),
+    peak_predicted = max(pred_med),
+    peak_day_true  = which.max(true_med),
+    peak_day_pred  = which.max(pred_med),
+    .groups = "drop"
+  ) |>
+  mutate(peak_day_err = abs(peak_day_true - peak_day_pred))
+
+write.csv(random_summary,
+          path.expand(file.path(DATA_DIR, "part2_random_pipeline_summary.csv")),
+          row.names = FALSE)
+
+# -- Plot 3: random pipeline (day > 1) ----------------------------------------
+p3 <- ggplot(random_df |> filter(day > 1), aes(x = day)) +
   geom_ribbon(aes(ymin = true_lower, ymax = true_upper),
               fill = "#1976D2", alpha = 0.20) +
   geom_line(aes(y = true_med, color = "SEIR - True (Random) Params"),
@@ -308,9 +326,9 @@ p3 <- ggplot(random_df, aes(x = day)) +
   scale_color_manual(values = c(
     "SEIR - True (Random) Params" = "#1976D2",
     "SEIR - BiLSTM Predicted"     = "#D32F2F")) +
-  labs(title    = "Part 2 - Random Parameters: True vs BiLSTM-Predicted SEIR Curves",
+  labs(title    = "Part 2 - Random Parameters: True vs BiLSTM-Predicted SEIR Curves [tuned]",
        subtitle = paste0("Shaded bands = 95% CI across ", NSIMS,
-                         " runs | BiLSTM input = median of true runs"),
+                         " runs | Days 2-365 shown"),
        x = "Day", y = "Daily Incidence (new exposures)", color = NULL) +
   theme_bw(base_size = 9) +
   theme(legend.position  = "bottom",
@@ -324,23 +342,7 @@ ggsave(path.expand(file.path(DATA_DIR, "part2_seir_random_pipeline.png")),
 print(p3)
 
 cat("\n-- Part 2 summary --\n")
-random_df |>
-  group_by(panel) |>
-  summarise(
-    mae_medians    = mean(abs(true_med - pred_med)),
-    peak_true      = max(true_med),
-    peak_predicted = max(pred_med),
-    peak_day_true  = which.max(true_med),
-    peak_day_pred  = which.max(pred_med),
-    .groups = "drop"
-  ) |>
-  mutate(peak_day_err = abs(peak_day_true - peak_day_pred)) |>
-  print()
-
-cat("\nSaved:\n")
-cat("  part1_seir_incidence_curves.png\n")
-cat("  part1_seir_per_day_mae.png\n")
-cat("  part2_seir_random_pipeline.png\n")
+print(random_summary)
 
 # =============================================================================
 # PART 3 -- Window analysis: inference across all 18 windows
@@ -369,7 +371,6 @@ p3_ids <- sample(intersect(preds$sim_idx, actual$sim_idx), N_P3)
 cat(sprintf("Part 3: %d sims x %d windows x %d runs each\n",
             N_P3, length(TEST_WINDOWS), NSIMS))
 
-# -- Pre-compute actual-param SEIR baselines ----------------------------------
 cat("  Pre-computing actual-param baselines...\n")
 act_baseline <- lapply(p3_ids, function(sid) {
   act <- actual |> filter(sim_idx == sid)
@@ -383,7 +384,6 @@ act_baseline <- lapply(p3_ids, function(sid) {
 })
 names(act_baseline) <- as.character(p3_ids)
 
-# -- Main loop ----------------------------------------------------------------
 window_rows    <- list()
 example_curves <- list()
 EXAMPLE_SID    <- p3_ids[1]
@@ -455,7 +455,6 @@ for (win_tag in names(TEST_WINDOWS)) {
 win_df <- bind_rows(window_rows)
 ex_df  <- bind_rows(example_curves)
 
-# -- Summarise ----------------------------------------------------------------
 win_summary <- win_df |>
   group_by(window, regime, win_len) |>
   summarise(across(c(err_beta, err_R0, curve_mae,
@@ -481,7 +480,7 @@ pA <- ggplot(param_long,
   scale_x_log10(breaks = LENGTHS) +
   scale_color_manual(values = c(early = "#E65100", mid = "#1565C0",
                                 late  = "#2E7D32")) +
-  labs(title    = "Part 3A: Parameter Error vs Window Length (SEIR)",
+  labs(title    = "Part 3A: Parameter Error vs Window Length (SEIR, tuned)",
        subtitle = sprintf("Mean MAE across %d val sims", N_P3),
        x = "Window length (days, log scale)", y = "Mean MAE", color = "Regime") +
   theme_bw(base_size = 11) +
@@ -499,7 +498,7 @@ pB <- ggplot(win_summary,
   scale_x_log10(breaks = LENGTHS) +
   scale_color_manual(values = c(early = "#E65100", mid = "#1565C0",
                                 late  = "#2E7D32")) +
-  labs(title    = "Part 3B: Recovered-Curve MAE vs Window Length (SEIR)",
+  labs(title    = "Part 3B: Recovered-Curve MAE vs Window Length (SEIR, tuned)",
        subtitle = "MAE between predicted-param and actual-param SEIR medians (full 365 days)",
        x = "Window length (days, log scale)", y = "Mean curve MAE", color = "Regime") +
   theme_bw(base_size = 11) +
@@ -510,9 +509,10 @@ ggsave(path.expand(file.path(DATA_DIR, "part3B_seir_curve_mae_vs_window.png")),
        pB, width = 9, height = 5, dpi = 150)
 print(pB)
 
-# -- Plot C: Example recovered curves across window lengths ------------------
+# -- Plot C: Example recovered curves (day > 1) -------------------------------
 if (nrow(ex_df) > 0) {
   ex_df <- ex_df |>
+    filter(day > 1) |>
     mutate(label = sprintf("%s (%d days)", win_tag, win_len),
            label = factor(label, levels = unique(label[order(win_len)])))
 
@@ -541,9 +541,9 @@ if (nrow(ex_df) > 0) {
                  "Predicted params" = "#D32F2F"),
       guide  = guide_legend(override.aes = list(linewidth = c(0.5, 1.0, 1.0),
                                                 alpha     = c(0.7, 1.0, 1.0)))) +
-    labs(title    = sprintf("Part 3C: Recovered SEIR Curves for sim %d across Window Lengths",
+    labs(title    = sprintf("Part 3C: Recovered SEIR Curves for sim %d across Window Lengths [tuned]",
                             EXAMPLE_SID),
-         subtitle = "Gold shading = observation window | Shaded bands = 95% CI",
+         subtitle = "Gold shading = observation window | Shaded bands = 95% CI | Days 2-365 shown",
          x = "Day", y = "Daily Incidence (new exposures)", color = NULL) +
     theme_bw(base_size = 9) +
     theme(legend.position  = "bottom",
@@ -563,7 +563,7 @@ pD1 <- ggplot(win_summary,
   scale_x_log10(breaks = LENGTHS) +
   scale_color_manual(values = c(early = "#E65100", mid = "#1565C0",
                                 late  = "#2E7D32")) +
-  labs(title = "Part 3D: Peak Day Error vs Window Length (SEIR)",
+  labs(title = "Part 3D: Peak Day Error vs Window Length (SEIR, tuned)",
        x = "Window length (days, log scale)",
        y = "Mean |predicted peak day - actual peak day|",
        color = "Regime") +
@@ -577,7 +577,7 @@ pD2 <- ggplot(win_summary,
   scale_x_log10(breaks = LENGTHS) +
   scale_color_manual(values = c(early = "#E65100", mid = "#1565C0",
                                 late  = "#2E7D32")) +
-  labs(title = "Part 3D: Peak Size Error vs Window Length (SEIR)",
+  labs(title = "Part 3D: Peak Size Error vs Window Length (SEIR, tuned)",
        x = "Window length (days, log scale)",
        y = "Mean |predicted peak size - actual peak size|",
        color = "Regime") +
@@ -590,7 +590,6 @@ ggsave(path.expand(file.path(DATA_DIR, "part3D_seir_peak_prediction.png")),
        pD, width = 10, height = 9, dpi = 150)
 print(pD)
 
-# -- Summary table ------------------------------------------------------------
 cat("\n-- Part 3 summary table --\n")
 win_summary |>
   select(window, regime, win_len,
@@ -601,6 +600,10 @@ win_summary |>
   print(n = 40)
 
 cat("\nSaved:\n")
+cat("  part1_seir_incidence_curves.png\n")
+cat("  part1_seir_per_day_mae.png\n")
+cat("  part2_seir_random_pipeline.png\n")
+cat("  part2_random_pipeline_summary.csv\n")
 cat("  part3A_seir_param_error_vs_window.png\n")
 cat("  part3B_seir_curve_mae_vs_window.png\n")
 cat("  part3C_seir_example_windows.png\n")
