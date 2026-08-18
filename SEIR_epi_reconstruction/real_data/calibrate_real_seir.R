@@ -218,15 +218,19 @@ process_dataset <- function(label, inc_csv, meta_csv, lstm_csv,
   n_pop      <- as.numeric(meta$n_pop)
   incub_days <- as.numeric(meta$incub_days)
   recov_rate <- as.numeric(meta$recov_rate)
-  prevalence <- as.numeric(meta$prevalence)
+  init <- seir_initial_conditions(obs, n_pop, incub_days, recov_rate)
 
   known <- list(n          = n_pop,
-                prevalence = prevalence,
+                prevalence = init$prevalence,
+                initial_infected_fraction = init$initial_infected_fraction,
                 incub      = incub_days,
                 recov      = recov_rate)
 
-  cat(sprintf("  %d days | n=%g, incub=%.0f d, recov=%.3f/d\n",
-      n_days, n_pop, incub_days, recov_rate))
+  cat(sprintf(paste0(
+      "  %d days | n=%g, initial E=%.1f, initial I=%.1f, ",
+      "incub=%.0f d, recov=%.3f/d\n"),
+      n_days, n_pop, init$initial_exposed, init$initial_infected,
+      incub_days, recov_rate))
 
   # ── Nelder-Mead ─────────────────────────────────────────────────────────────
   cat("  Running NM calibration (multi-start)...\n")
@@ -247,10 +251,18 @@ process_dataset <- function(label, inc_csv, meta_csv, lstm_csv,
 
   if (file.exists(lstm_csv)) {
     preds_df <- read.csv(lstm_csv)
+
+    # Prefer an explicitly requested prediction. If it is unavailable, fall
+    # back to the longest window that starts with the reconstructed series;
+    # this avoids silently substituting a late, shorter slice merely because
+    # it happens to be listed first among equally long windows.
+    anchored <- preds_df[preds_df$t_start == 0, ]
+
     if (prefer_window %in% preds_df$window) {
       row_lstm <- preds_df[preds_df$window == prefer_window, ][1L, ]
+    } else if (nrow(anchored) > 0) {
+      row_lstm <- anchored[which.max(anchored$win_len), ][1L, ]
     } else {
-      # Largest available window
       row_lstm <- preds_df[which.max(preds_df$win_len), ][1L, ]
     }
     lstm_beta <- row_lstm$beta_pred
@@ -330,7 +342,7 @@ results <- list(
     inc_csv        = file.path(REAL_DIR, "measles_hagelloch_incidence.csv"),
     meta_csv       = file.path(REAL_DIR, "measles_hagelloch_meta.csv"),
     lstm_csv       = file.path(REAL_DIR, "bernardo_real_measles_predictions.csv"),
-    prefer_window  = "late_060d",  # use 60-day window (longest typical for measles)
+    prefer_window  = "full_087d",  # full 87-day outbreak, anchored at day 1
     nm_nreps       = 300L,         # more reps for small stochastic population
     nm_threads     = 4L
   )

@@ -135,6 +135,46 @@ seir_derive <- function(p) {
 # Model construction and simulation
 # =============================================================================
 
+# Convert an observed E -> I incidence rate into compatible SEIR starting
+# compartments.  At quasi-equilibrium, the number currently Exposed is about
+# incidence * latent duration and the number currently Infected is about
+# incidence * infectious duration.  ModelSEIRCONN's prevalence argument puts
+# every seed in Exposed by default; initial_infected_fraction lets seir_build()
+# split that seed between E and I instead.
+seir_initial_conditions <- function(obs, n, incub, recov, n_smooth = 3L) {
+  stopifnot(length(obs) > 0L, is.finite(n), n > 0,
+            is.finite(incub), incub > 0,
+            is.finite(recov), recov > 0)
+
+  k <- min(as.integer(n_smooth), length(obs))
+  initial_rate <- mean(pmax(as.numeric(obs[seq_len(k)]), 0), na.rm = TRUE)
+  if (!is.finite(initial_rate)) initial_rate <- 0
+
+  n_exposed  <- initial_rate * incub
+  n_infected <- initial_rate / recov
+  n_seed     <- n_exposed + n_infected
+
+  if (n_seed <= 0) {
+    n_seed <- 1
+    infected_fraction <- 0
+  } else {
+    infected_fraction <- n_infected / n_seed
+  }
+
+  # Preserve at least half of the modeled population as susceptible.  This is
+  # only a guard for pathological inputs; ordinary outbreak windows are far
+  # below the cap.
+  n_seed <- min(n_seed, 0.5 * n)
+
+  list(
+    prevalence              = n_seed / n,
+    initial_infected_fraction = infected_fraction,
+    initial_exposed         = n_seed * (1 - infected_fraction),
+    initial_infected        = n_seed * infected_fraction,
+    initial_incidence       = initial_rate
+  )
+}
+
 seir_build <- function(p) {
   n_int <- max(as.integer(round(p$n)), 10L)
 
@@ -164,6 +204,16 @@ seir_build <- function(p) {
     incubation_days   = max(p$incub, 1.0),
     recovery_rate     = max(min(p$recov, 1.0), 1e-6)
   )
+
+  if (!is.null(p$initial_infected_fraction)) {
+    infected_fraction <- as.numeric(p$initial_infected_fraction)
+    if (length(infected_fraction) != 1L || !is.finite(infected_fraction) ||
+        infected_fraction < 0 || infected_fraction > 1) {
+      stop("initial_infected_fraction must be a finite scalar in [0, 1].")
+    }
+    epiworldR::initial_states(m, c(infected_fraction, 0.0))
+  }
+
   epiworldR::verbose_off(m)
   m
 }
