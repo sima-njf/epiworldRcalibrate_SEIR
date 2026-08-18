@@ -491,19 +491,27 @@ process_dataset <- function(label, inc_csv, meta_csv, bilstm_csv) {
   # n_classical_comment in seir_scale_config.json.
   n_use <- if (n_true > N_SCALED) N_SCALED else n_true
 
-  # Seed prevalence directly from the observed window on the n_use scale
-  # (same convention as the SIR vignette: prevalence = incidence[1] / N),
-  # not from meta$prevalence, which was computed as a fraction of the TRUE
-  # population and collapses to a sub-1-person seed once applied to n_use.
+  # The observed series starts after cases are already being reported. Convert
+  # its opening E -> I incidence into both an Exposed stock (incidence times the
+  # latent duration) and an Infected stock (incidence times the infectious
+  # duration). ModelSEIRCONN otherwise puts every seed in Exposed, which makes
+  # every reconstructed curve start near zero and forces calibration methods
+  # to compensate for a phase/initial-condition error.
+  init <- seir_initial_conditions(
+    obs, n_use, as.numeric(meta$incub_days), as.numeric(meta$recov_rate)
+  )
   known <- list(
     n          = n_use,
-    prevalence = obs[1] / n_use,
+    prevalence = init$prevalence,
+    initial_infected_fraction = init$initial_infected_fraction,
     incub      = as.numeric(meta$incub_days),
     recov      = as.numeric(meta$recov_rate)
   )
 
-  cat(sprintf("  %d days | n_true=%.0f, n_used=%.0f, prevalence=%.4f (seed=%.1f), incub=%.0fd, recov=%.3f\n",
-      ndays, n_true, n_use, known$prevalence, known$prevalence * n_use,
+  cat(sprintf(paste0(
+      "  %d days | n_true=%.0f, n_used=%.0f, initial E=%.1f, ",
+      "initial I=%.1f, incub=%.0fd, recov=%.3f\n"),
+      ndays, n_true, n_use, init$initial_exposed, init$initial_infected,
       known$incub, known$recov))
 
   # Load Bernardo predictions if available
