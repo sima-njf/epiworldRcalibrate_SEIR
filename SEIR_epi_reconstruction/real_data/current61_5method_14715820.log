@@ -1,0 +1,47 @@
+
+Done. Plots saved to real_data/plots/
+
+=== Utah COVID-19 Current (2025) ===
+  61 days | n_true=3340000, n_used=7000, prevalence=0.0071 (seed=50.0), incub=5d, recov=0.143
+  --- Window: 61 days (BiLSTM beta=0.1352) ---
+    Window 61 days...
+      BiLSTM... Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+beta=0.1352 R0=0.946
+      ABC... 58.0 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=9.2051 R0=64.436
+      ABC-SMC... 79.7 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=0.2734 R0=1.914
+      NM... 0.6 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=0.2827 R0=1.979
+      DE... 34.8 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=1.4672 R0=10.271
+    Saved: utah_covid_19_current__2025__w061_5method_ci.png
+  Params saved: utah_covid_19_current__2025__5method_params.csv
+
+  ========== Parameter estimates ==========
+                      dataset win_len     method   beta      R0
+ Utah COVID-19 Current (2025)      61     BiLSTM 0.1352  0.9463
+ Utah COVID-19 Current (2025)      61        ABC 9.2051 64.4358
+ Utah COVID-19 Current (2025)      61    ABC-SMC 0.2734  1.9139
+ Utah COVID-19 Current (2025)      61 NelderMead 0.2827  1.9789
+ Utah COVID-19 Current (2025)      61         DE 1.4672 10.2706
+
+Done. Plots saved to real_data/plots/, params to real_data/utah_covid_19_current_2025_5method_params.csv
+Warning message:
+In DEoptimR::JDEoptim(lower = bnd$lo, upper = bnd$hi, fn = obj_de,  :
+  maximum number of iterations reached without convergence

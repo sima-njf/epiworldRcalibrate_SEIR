@@ -1,0 +1,2 @@
+window,regime,win_len,t_start,beta_pred,R0_pred,time_sec,n_bilstm_used
+early_048d,early,48,0,0.21753834187984467,1.7612109184265137,0.039028523955494165,8000.0

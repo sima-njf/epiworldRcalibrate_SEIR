@@ -1,0 +1,52 @@
+BiLSTM       beta=0.1208  running 2000-rep ensemble...
+Starting multiple runs (2000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+ABC          beta=0.4544  running 2000-rep ensemble...
+Starting multiple runs (2000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+ABC-SMC      beta=0.4253  running 2000-rep ensemble...
+Starting multiple runs (2000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+NelderMead   beta=0.3666  running 2000-rep ensemble...
+Starting multiple runs (2000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+DE           beta=0.4279  running 2000-rep ensemble...
+Starting multiple runs (2000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+
+========== Coverage / RMSE / MAE by method ==========
+         period     method   beta    R0 coverage_pct    rmse     mae n_in_ci
+ full_wave_365d     BiLSTM 0.1208 1.208        0.000 1459.73 1038.89       0
+ full_wave_365d        ABC 0.4544 4.544        6.849 1461.76 1030.15      25
+ full_wave_365d    ABC-SMC 0.4253 4.253        7.671 1461.61 1028.89      28
+ full_wave_365d NelderMead 0.3666 3.666        5.753 1461.12 1027.00      21
+ full_wave_365d         DE 0.4279 4.279        7.671 1461.62 1028.98      28
+  in_sample_60d     BiLSTM 0.1208 1.208        0.000  127.76  118.42       0
+  in_sample_60d        ABC 0.4544 4.544       28.333   81.94   71.03      17
+  in_sample_60d    ABC-SMC 0.4253 4.253       30.000   82.34   70.59      18
+  in_sample_60d NelderMead 0.3666 3.666       23.333   86.80   74.73      14
+  in_sample_60d         DE 0.4279 4.279       30.000   82.33   70.55      18
+ n_days
+    365
+    365
+    365
+    365
+    365
+     60
+     60
+     60
+     60
+     60
+
+Saved plot: /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/real_data/plots/utah_covid_5method_metrics.png
+Saved metrics: /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/real_data/utah_covid_5method_metrics.csv

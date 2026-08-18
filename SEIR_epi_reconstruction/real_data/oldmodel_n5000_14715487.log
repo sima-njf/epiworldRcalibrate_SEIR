@@ -1,0 +1,7 @@
+N=5000  prevalence=0.01000 (seed=50.0)  beta=0.1462  R0=1.0234
+Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+RMSE=31.77  MAE=29.11  coverage=0.0%
+Saved: /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/real_data/plots/current61_oldmodel_N5000.png

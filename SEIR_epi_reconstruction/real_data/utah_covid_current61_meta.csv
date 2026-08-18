@@ -1,0 +1,2 @@
+"dataset","n_pop","incub_days","recov_rate","prevalence","wave_start","wave_end","n_days","peak_cases","total_cases","note"
+"utah_covid_current61",3340000,5,0.142857142857143,0.000126946107784431,"2025-03-07","2025-05-06",61,107,2034,"Current (as-packaged) 61-day Utah COVID window, not the 2020-21 wave. Raw confirmed cases used directly as E->I incidence proxy (same convention as utah_covid_meta.csv). Prevalence seeded as mean(first 3 days) * (incub+recov period) / true pop -- corrects the naive incidence[1]/N seed (undercounts by ~the infectious period)."

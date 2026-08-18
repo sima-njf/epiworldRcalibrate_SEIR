@@ -1,0 +1,5 @@
+"method","R0","R0_lower","R0_upper","time_s"
+"Growth rate (model-free)",1.24345523674248,NA,NA,NA
+"Direct search (Method A)",0.940983005625053,NA,NA,5.396
+"ABC / LFMCMC (Method B)",1.00129393110967,0.539981209652726,1.27603051084587,67.69
+"Bernardo BiLSTM",1.09639942646027,NA,NA,NA

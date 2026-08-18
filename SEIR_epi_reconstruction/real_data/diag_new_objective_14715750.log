@@ -1,0 +1,15 @@
+--- New (summary-stat) objective: noise check ---
+beta=0.625 (R0=5.0): dist mean=3.882 sd=1.510 range=[1.219,5.871]
+beta=3.800 (R0=30.4): dist mean=1.444 sd=0.849 range=[0.772,3.657]
+
+--- Objective vs beta (10 reps averaged each) ---
+beta=0.20 R0=  1.6  mean_dist=5.662
+beta=0.40 R0=  3.2  mean_dist=5.422
+beta=0.60 R0=  4.8  mean_dist=4.219
+beta=0.80 R0=  6.4  mean_dist=2.866
+beta=1.00 R0=  8.0  mean_dist=2.936
+beta=1.50 R0= 12.0  mean_dist=1.821
+beta=2.00 R0= 16.0  mean_dist=1.420
+beta=3.00 R0= 24.0  mean_dist=0.794
+beta=4.00 R0= 32.0  mean_dist=1.737
+beta=5.00 R0= 40.0  mean_dist=1.586

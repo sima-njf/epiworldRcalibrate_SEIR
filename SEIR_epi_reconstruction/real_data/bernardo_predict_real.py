@@ -45,6 +45,27 @@ MIN_LEN = 15
 MIN_SUM = 5       # skip windows with fewer total cases (uninformative)
 DEVICE  = torch.device("cpu")
 
+# The BiLSTM was trained on simulated populations with n in [5000, 10000]
+# (see test_actual_parameters (2).csv). Real population sizes (e.g. Utah's
+# 3.27M) are ~300-650x outside that range: scaler_additional.transform()
+# maps them to huge out-of-[0,1] values, which saturates the sigmoid output
+# head to a fixed corner (beta_pred/R0_pred pinned at the scaler's max,
+# identical for every window). To keep the model in-distribution we scale
+# the population (and incidence, proportionally, since the "additional"
+# features include log(mean)/log(std) of the window in absolute case
+# counts) down to a population inside the trained range before predicting.
+#
+# This scale is read from seir_scale_config.json -- the single shared source
+# of truth also read by calibrate_real_5method.R (n_classical there). Do NOT
+# hard-code a value here: two scripts each inventing their own population
+# assumption with no cross-check is exactly the bug pattern found 2026-08-17
+# on the SIR side of this project. The scale actually used is stamped into
+# every output row (n_bilstm_used column) so a stale/edited config is
+# detectable downstream instead of silently producing wrong predictions.
+with open(os.path.join(REAL_DIR, "seir_scale_config.json")) as _f:
+    _scale_cfg = json.load(_f)
+N_SCALED = float(_scale_cfg["n_bilstm"])
+
 
 # ── Model (identical architecture to generate_bernardo_predictions.py) ─────────
 
@@ -149,6 +170,16 @@ def run_dataset(model, scaler_add, scaler_tgt,
     n_days  = len(inc)
     lengths = [L for L in [15, 30, 60, 90, 180, 365] if L <= n_days]
 
+    # Scale population + incidence into the model's trained range (see
+    # N_SCALED comment above). beta = crate * ptran is an intensive
+    # (population-independent) rate, so predictions need no re-scaling;
+    # only the raw case counts and the population feature are scaled down.
+    scale_factor = min(1.0, N_SCALED / n_pop) if n_pop > 0 else 1.0
+    n_pop_model  = n_pop * scale_factor
+    inc_model    = inc * scale_factor
+    print(f"  Scaling for BiLSTM: n_pop {n_pop:,.0f} -> {n_pop_model:,.0f} "
+          f"(factor={scale_factor:.6g})")
+
     rows = []
     for L in lengths:
         for regime, t0 in [
@@ -156,13 +187,13 @@ def run_dataset(model, scaler_add, scaler_tgt,
             ("mid",   max(0, (n_days - L) // 2)),
             ("late",  max(0, n_days - L)),
         ]:
-            seq = inc[t0 : t0 + L]
+            seq = inc_model[t0 : t0 + L]
             if len(seq) < MIN_LEN or float(np.sum(seq)) < MIN_SUM:
                 continue
             try:
                 beta, R0, elapsed = predict_window(
                     model, scaler_add, scaler_tgt,
-                    seq, n_pop, recov, incub
+                    seq, n_pop_model, recov, incub
                 )
                 rows.append({
                     "window":    f"{regime}_{L:03d}d",
@@ -172,6 +203,7 @@ def run_dataset(model, scaler_add, scaler_tgt,
                     "beta_pred": beta,
                     "R0_pred":   R0,
                     "time_sec":  elapsed,
+                    "n_bilstm_used": N_SCALED,
                 })
                 print(f"  {regime}_{L:03d}d  beta={beta:.4f}  R0={R0:.3f}"
                       f"  ({elapsed*1000:.1f} ms)")
@@ -183,7 +215,7 @@ def run_dataset(model, scaler_add, scaler_tgt,
         try:
             beta, R0, elapsed = predict_window(
                 model, scaler_add, scaler_tgt,
-                inc, n_pop, recov, incub
+                inc_model, n_pop_model, recov, incub
             )
             rows.append({
                 "window":    f"full_{n_days:03d}d",

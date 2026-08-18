@@ -1,0 +1,12 @@
+filled: 150 / 150 
+Gen 1: eps=5.717  weighted median beta=9.9124  dist range=[3.53,8.14]
+Gen 2: n_ev_this_gen=553 (0.8s) eps=4.4787  theta range=[0.623,19.360]  weighted median beta=5.4655  ESS=146.6
+Gen 3: n_ev_this_gen=1258 (1.8s) eps=4.0804  theta range=[0.748,18.481]  weighted median beta=4.4733  ESS=142.7
+Gen 4: n_ev_this_gen=3814 (5.3s) eps=3.8043  theta range=[0.808,17.404]  weighted median beta=3.1478  ESS=142.6
+Gen 5: n_ev_this_gen=11275 (15.6s) eps=3.5795  theta range=[0.913,11.629]  weighted median beta=2.1792  ESS=148.9
+Gen 6: n_ev_this_gen=23517 (32.3s) eps=3.4016  theta range=[0.825,7.525]  weighted median beta=1.9421  ESS=146.6
+Gen 7: STALLED at i=106/150, atts=45000, n_ev_this_gen=38836 (53.1s)
+
+--- Noise check: distance_fn variance at two candidate betas ---
+beta=0.625 (R0=5.0): dist mean=5.74 sd=0.69 range=[4.19,6.29]
+beta=3.800 (R0=30.4): dist mean=5.25 sd=1.12 range=[3.63,7.26]

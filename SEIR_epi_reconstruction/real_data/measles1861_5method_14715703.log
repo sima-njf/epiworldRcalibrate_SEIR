@@ -1,0 +1,48 @@
+
+Done. Plots saved to real_data/plots/
+
+=== Measles 1861 (EpiEstim) ===
+  48 days | n_true=187, n_used=187, prevalence=0.0053 (seed=1.0), incub=10d, recov=0.125
+  --- Window: 48 days (BiLSTM beta=0.2175) ---
+    Window 48 days...
+      BiLSTM... Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+beta=0.2175 R0=1.740
+      ABC... 4.0 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=5.6365 R0=45.092
+      ABC-SMC...     (ABC-SMC stalled at generation 6, 81/150 filled -- using generation 5's result)
+35.5 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=2.3903 R0=19.122
+      NM... 0.1 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=0.7891 R0=6.313
+      DE... 2.3 sStarting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  beta=1.1621 R0=9.296
+    Saved: measles_1861__epiestim__w048_5method_ci.png
+  Params saved: measles_1861__epiestim__5method_params.csv
+
+  ========== Parameter estimates ==========
+                 dataset win_len     method   beta     R0
+ Measles 1861 (EpiEstim)      48     BiLSTM 0.2175  1.740
+ Measles 1861 (EpiEstim)      48        ABC 5.6365 45.092
+ Measles 1861 (EpiEstim)      48    ABC-SMC 2.3903 19.122
+ Measles 1861 (EpiEstim)      48 NelderMead 0.7891  6.313
+ Measles 1861 (EpiEstim)      48         DE 1.1621  9.296
+
+Done. Plots saved to real_data/plots/, params to real_data/measles_1861__epiestim__5method_params.csv
+Warning message:
+In DEoptimR::JDEoptim(lower = bnd$lo, upper = bnd$hi, fn = obj_de,  :
+  maximum number of iterations reached without convergence

@@ -1,0 +1,127 @@
+
+--- Active assumptions (none of these come from the data) ---
+  True population      : 3,340,000
+  Simulated population : 8,000 (from seir_scale_config.json)
+  Scale factor         : 2.395e-03
+  Reporting fraction   : 0.10
+  Latent period        : 5 days (sigma = 0.2000)
+  Infectious period    : 7 days (gamma = 0.1429)
+  Seed burn-in         : 5 days
+-------------------------------------------------------------
+
+=== Loading data ===
+  2025-03-07 to 2025-05-06
+  Total confirmed cases : 2,034
+  Mean daily cases      : 33.3
+  Scaling check: 49 scaled infections over 61 days in n=8000 (attack rate 0.6%)
+
+  Early growth rate r   : 0.0192 /day (doubling 36.1 d)
+  Implied R0 under SEIR : 1.24   <- structural target
+  Implied R0 under SIR  : 1.13   (reference only)
+
+=== Building SEIR model ===
+  Initial prevalence: 0.00127 (10 agents seeded as Exposed)
+
+  Verify these labels match SEIR_PARAM in section 4:
+________________________________________________________________________________
+________________________________________________________________________________
+SIMULATION STUDY
+
+Name of the model   : Susceptible-Exposed-Infected-Removed (SEIR) (connected)
+Population size     : 8000
+Agents' data        : (none)
+Number of entities  : 0
+Days (duration)     : 0 (of 0)
+Number of viruses   : 1
+Last run elapsed t  : -
+Rewiring            : off
+Last seed used      : 0
+
+Global events:
+ - Update infected individuals (runs daily)
+
+Virus(es):
+ - Utah COVID-19 (SEIR)
+
+Tool(s):
+ (none)
+
+Model parameters:
+ - Avg. Incubation days : 5.0000
+ - Contact rate         : 5.0000
+ - Prob. Recovery       : 0.1429
+ - Prob. Transmission   : 0.0500
+________________________________________________________________________________
+Susceptible-Exposed-Infected-Removed (SEIR) (connected)
+It features 8000 agents, 1 virus(es), and 0 tool(s).
+The model has 4 states. The model hasn't been run yet.
+
+=== Method A: direct R0 search ===
+  Coarse scan over 31 values of R0...
+  R0           : 0.941
+  Contact rate : 2.689
+  SMAPE        : 134.2%
+  Time         : 5.4 s
+
+=== Method B: ABC (LFMCMC) ===
+  Observed summary stats: 48.719, 2.563, 13, 1, 0.701, 0.685
+  3000 samples, 1500 burn-in, epsilon 0.25 (relative), 2 free params
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||  Acceptance rate: 2.5%  <- too low: raise ABC_EPSILON or shrink the proposal sd
+  Contact rate : 3.5406 [3.2957, 4.4513]
+  Trans. prob  : 0.0333 [0.0302, 0.0416]
+  R0           : 0.850 [0.737, 1.100]
+  Time         : 66.2 s
+  Saved: abc_traces.png
+
+=== BiLSTM prediction (same window) ===
+  R0 (current_061d): 1.096
+
+=== Uncertainty quantification ===
+  Running 2000 simulations at R0 = 0.850...
+Starting multiple runs (2000) using 4 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  95% coverage : 15.0% (9 of 60 days)
+  RMSE         : 15.5 cases/day
+  MAE          : 11.9 cases/day
+  Saved: seir_fit.png
+  Saved: objective_surface.png
+
+################################################################
+  RESULTS
+################################################################
+
+                   method     R0 R0_lower R0_upper time_s
+ Growth rate (model-free) 1.2435       NA       NA     NA
+ Direct search (Method A) 0.9410       NA       NA  5.443
+  ABC / LFMCMC (Method B) 0.8502   0.7372      1.1 66.230
+          Bernardo BiLSTM 1.0964       NA       NA     NA
+
+  Fit (final parameters):
+    95% coverage : 15.0%
+    RMSE         : 15.5 cases/day
+    MAE          : 11.9 cases/day
+
+  All R0 values above are conditional on an assumed infectious period
+  of 7 days and latent period of 5 days. R0 is linear in the
+  former; change it and every number in this table moves proportionally.
+
+  Sensitivity of R0 to the assumed durations (growth-rate based):
+
+ latent infectious   R0 pct_vs_baseline
+      2          5 1.14             -8%
+      3          5 1.16             -7%
+      5          5 1.20             -3%
+      2          7 1.18             -5%
+      3          7 1.20             -3%
+      5          7 1.24             -0%
+      2         10 1.24             -0%
+      3         10 1.26             +1%
+      5         10 1.31             +5%
+
+  Output written to: seir_output/
+    seir_results.csv, seir_fitted_curve.csv, seir_sensitivity.csv
+    seir_calibration.rds, seir_fit.png, objective_surface.png, abc_traces.png
+

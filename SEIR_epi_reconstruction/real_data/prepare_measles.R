@@ -143,13 +143,30 @@ write.csv(
 # SEIR model assumptions
 # -------------------------------------------------------------------------
 #
-# IMPORTANT:
-# 188 is the number of observed cases in the Hagelloch dataset.
+# UPDATE 2026-08-17: n_pop=188 is NOT just a modeling shortcut -- it is the
+# historically documented susceptible population. Per Neal & Roberts (2004,
+# Biostatistics 5(2):249-261) and the `surveillance` package's hagelloch
+# docs, Hagelloch had 577 total inhabitants in 1861, of whom exactly 188
+# children aged <=15 were susceptible to measles (adults were presumably
+# already immune from earlier outbreaks) -- and all 188 of them were
+# infected over the course of the outbreak (100% attack rate among
+# susceptibles). So n_pop=188 correctly reflects the closed susceptible
+# pool; using the full village population (577) would overstate it.
 #
-# If n_pop = 188 is used in the SEIR reconstruction, this is a MODELING
-# ASSUMPTION that the modeled population consists of these 188 individuals.
-# It should not be interpreted as evidence that 188 was necessarily the
-# entire susceptible population of Hagelloch.
+# CONSEQUENCE for calibration: reproducing a ~100% attack rate THIS FAST
+# (within the observed window, from a single seed case) in a homogeneously-
+# mixed model (ModelSEIRCONN has no household/school structure) requires an
+# inflated "effective R0" -- diagnosed 2026-08-17 on the companion EpiEstim
+# smoke-test dataset (measles1861_epiestim), where ABC/NM/DE/ABC-SMC
+# consistently converged to R0 in the 6-45 range regardless of the distance
+# metric used (raw pointwise MSE vs shape-based summary statistics -- see
+# distance_fn in calibrate_real_5method.R). This is not a calibration bug:
+# Neal & Roberts' own paper exists because a simple well-mixed model can't
+# explain this outbreak without added household/school-class contact
+# structure, which ModelSEIRCONN doesn't have. Any R0 this pipeline reports
+# for this dataset should be read as "the effective R0 a homogeneously-
+# mixed model needs to match the outbreak's speed", not literally the
+# biological R0 of measles.
 #
 # Fixed inputs used here:
 #
@@ -198,9 +215,13 @@ meta <- data.frame(
   note = paste(
     "Observed incidence is aggregated from date_of_prodrome",
     "and used as the empirical proxy for SEIR E->I incidence.",
-    "n_pop=188 is a modeling assumption based on the 188 observed cases,",
-    "not a claim that 188 was necessarily the full susceptible population.",
-    "Small population size may lead to substantial stochastic variability."
+    "n_pop=188 is the documented susceptible population (Neal & Roberts 2004:",
+    "Hagelloch had 577 total inhabitants, 188 children <=15 susceptible to",
+    "measles, all 188 infected), NOT the full village population.",
+    "A homogeneously-mixed SEIR needs an inflated effective R0 to reproduce",
+    "this outbreak's speed since it lacks the household/school contact",
+    "structure Neal & Roberts show is needed to properly explain this data;",
+    "R0 estimates from this pipeline should be read accordingly."
   ),
 
   stringsAsFactors = FALSE

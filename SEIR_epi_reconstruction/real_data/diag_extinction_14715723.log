@@ -1,0 +1,5 @@
+BiLSTM       beta=0.2175 R0= 1.74  frac_extinct(<=1 total case)=36.3%  median_total=2  mean_total=5.9
+NelderMead   beta=0.7891 R0= 6.31  frac_extinct(<=1 total case)=10.7%  median_total=98  mean_total=83.5
+DE           beta=1.1621 R0= 9.30  frac_extinct(<=1 total case)=7.0%  median_total=150  mean_total=121.7
+ABC-SMC      beta=2.3903 R0=19.12  frac_extinct(<=1 total case)=2.7%  median_total=175  mean_total=157.0
+ABC          beta=5.6365 R0=45.09  frac_extinct(<=1 total case)=1.0%  median_total=181  mean_total=170.5

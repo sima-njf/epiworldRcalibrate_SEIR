@@ -137,7 +137,23 @@ seir_derive <- function(p) {
 
 seir_build <- function(p) {
   n_int <- max(as.integer(round(p$n)), 10L)
-  prev  <- max(min(p$prevalence, 1.0), 1.0 / n_int)
+
+  # Floating-point trap (found 2026-08-17 on n=187, prevalence=1/187 exactly):
+  # 1/187 * 187 == 0.99999999999999988898 in double precision, not 1.0. If
+  # ModelSEIRCONN converts prevalence*n to an integer seed count by
+  # truncation rather than rounding, that silently seeds ZERO initial
+  # infections instead of 1 -- a completely inert simulation (no epidemic
+  # possible; get_hist_transition_matrix() then only ever shows the
+  # "Susceptible" state, since nothing ever transitions, and
+  # seir_incidence_e2i()/seir_run_multi_ci() error out with "No Exposed ->
+  # Infected transitions"). seed_n/n_int reproduces the exact same trap
+  # (it's the same value), so nudge prev just above the seed_n/n_int
+  # boundary by a relative epsilon -- comfortably larger than double
+  # precision error, negligible next to the seed count itself -- so
+  # prev*n_int safely truncates (or rounds) back to seed_n instead of
+  # seed_n - 1.
+  seed_n <- max(1L, as.integer(round(min(p$prevalence, 1.0) * n_int)))
+  prev   <- min((seed_n / n_int) * (1 + 1e-6), 1.0)
 
   m <- epiworldR::ModelSEIRCONN(
     name              = "sim",
@@ -202,7 +218,13 @@ seir_run_multi_ci <- function(p, ndays = SEIR_NDAYS, nreps = 300L,
                             seed = as.integer(seed))
   }
 
-  res <- epiworldR::run_multiple_get_results(m, nthreads = nthreads,
+  # NOTE: nthreads=1 here (not the simulation's nthreads) -- run_multiple_get_results()
+  # reads per-rep CSVs via parallel::makeCluster()/parLapply() when nthreads > 1, and
+  # those cluster workers are fresh R processes that don't inherit this session's
+  # custom .libPaths()/LD_LIBRARY_PATH, so data.table::fread() fails inside them with
+  # "could not find function %chin%" (bug found 2026-08-17). Serial reading is fine
+  # here since it only runs once per ensemble, not per simulation.
+  res <- epiworldR::run_multiple_get_results(m, nthreads = 1L,
                                              freader = data.table::fread)
   tr  <- data.table::as.data.table(res$transition)
 

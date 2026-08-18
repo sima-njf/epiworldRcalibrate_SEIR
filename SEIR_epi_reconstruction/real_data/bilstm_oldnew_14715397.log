@@ -1,0 +1,26 @@
+
+=== current61 ===
+Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  Current tuned: RMSE=32.35 MAE=29.81 coverage=0.0%
+  Archived old : RMSE=31.71 MAE=29.05 coverage=0.0%
+  Saved: /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/real_data/plots/current61_bilstm_old_vs_new.png
+
+=== wave1_first60 ===
+Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+Starting multiple runs (1000) using 12 thread(s)
+_________________________________________________________________________
+_________________________________________________________________________
+||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| done.
+  Current tuned: RMSE=128.64 MAE=119.27 coverage=0.0%
+  Archived old : RMSE=127.14 MAE=117.88 coverage=0.0%
+  Saved: /uufs/chpc.utah.edu/common/home/u1418987/sima/epiworldRcalibrate_SEIR/SEIR_epi_reconstruction/real_data/plots/wave1_first60_bilstm_old_vs_new.png
